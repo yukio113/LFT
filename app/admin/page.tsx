@@ -34,6 +34,7 @@ const ADMIN_USER_IDS = (process.env.NEXT_PUBLIC_ADMIN_USER_IDS ?? "")
   .split(",")
   .map((id) => id.trim())
   .filter(Boolean);
+const HAS_ADMIN_CONFIG = ADMIN_USER_IDS.length > 0;
 
 export default function AdminPage() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
@@ -46,7 +47,7 @@ export default function AdminPage() {
 
   const isAdmin = useMemo(() => {
     if (!currentUser) return false;
-    if (ADMIN_USER_IDS.length === 0) return true;
+    if (!HAS_ADMIN_CONFIG) return false;
     return ADMIN_USER_IDS.includes(currentUser.id);
   }, [currentUser]);
 
@@ -227,6 +228,22 @@ export default function AdminPage() {
     );
   }
 
+  if (!HAS_ADMIN_CONFIG) {
+    return (
+      <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
+        <div className="mx-auto max-w-xl rounded-xl border border-amber-300 bg-white p-6 shadow-sm">
+          <h1 className="mb-2 text-xl font-bold">管理者ページ</h1>
+          <p className="mb-4 text-sm text-amber-800">
+            管理者IDが未設定です。`NEXT_PUBLIC_ADMIN_USER_IDS` に Supabase ユーザーIDをカンマ区切りで設定してください。
+          </p>
+          <Link href="/" className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white">
+            トップへ戻る
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
   if (!isAdmin) {
     return (
       <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
@@ -306,7 +323,7 @@ export default function AdminPage() {
         <section className="rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
           <input
             type="text"
-            placeholder="タイトル / 投稿者ID / モード で絞り込み"
+            placeholder="タイトル / 投稿者ID / モードで絞り込み"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="w-full rounded border border-slate-400 bg-white p-2 text-sm"
@@ -322,7 +339,7 @@ export default function AdminPage() {
                   <p className="text-xs text-slate-600">
                     投稿者ID: {post.user_id} / モード: {post.mode} / 募集人数: {post.recruit_count}
                   </p>
-                  <p className="text-xs text-slate-600">作成日時: {new Date(post.created_at).toLocaleString("ja-JP")}</p>
+                  <p className="text-xs text-slate-600">投稿日: {new Date(post.created_at).toLocaleString("ja-JP")}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {post.is_closed ? (
@@ -353,7 +370,7 @@ export default function AdminPage() {
               </div>
 
               <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="mb-1 text-sm font-semibold">応募者一覧 ({post.applications?.length ?? 0})</p>
+                <p className="mb-1 text-sm font-semibold">応募一覧 ({post.applications?.length ?? 0})</p>
                 <ul className="space-y-1 text-sm text-slate-700">
                   {(post.applications ?? []).map((app) => (
                     <li key={app.id}>

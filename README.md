@@ -1,36 +1,39 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# LFT (Looking For Team)
 
-## Getting Started
+APEX向けの募集・応募マッチングアプリです。  
+認証は Supabase Auth + Discord OAuth を利用しています。
 
-First, run the development server:
+## 必要な環境変数
+
+`.env.example` をコピーして `.env.local` を作成し、値を設定してください。
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `NEXT_PUBLIC_ADMIN_USER_IDS`（管理者ユーザーIDをカンマ区切り）
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## 開発起動
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+```bash
+npm install
+npm run dev
+```
 
-## Learn More
+## 本番公開前チェック
 
-To learn more about Next.js, take a look at the following resources:
+1. Supabase Auth の `Site URL` を公開URLに設定
+2. Discord Developer Portal の `Redirects` に以下を登録
+   - `https://<公開ドメイン>/auth/callback`
+3. Supabase Auth Provider(Discord)の Client ID / Client Secret を最新化
+4. デプロイ先（Vercel等）に環境変数を設定
+5. 管理者ページを使う場合は `NEXT_PUBLIC_ADMIN_USER_IDS` を必ず設定
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## ビルド / 本番起動
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```bash
+npm run build
+npm run start
+```
