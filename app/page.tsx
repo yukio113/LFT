@@ -1,7 +1,7 @@
 ﻿"use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { supabase } from "../lib/supabase";
+import { hasSupabaseEnv, supabase, supabaseConfigMessage } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Image from "next/image";
 
@@ -290,6 +290,7 @@ export default function Home() {
 
   useEffect(() => {
     let mounted = true;
+    if (!hasSupabaseEnv) return;
 
     const syncSession = async () => {
       const params = new URLSearchParams(window.location.search);
@@ -338,6 +339,10 @@ export default function Home() {
   }, []);
 
   const fetchPosts = useCallback(async () => {
+    if (!hasSupabaseEnv) {
+      setPosts([]);
+      return;
+    }
     const { data, error } = await supabase
       .from("posts")
       .select(`
@@ -354,6 +359,10 @@ export default function Home() {
   }, []);
 
   const fetchPlayStyleTags = useCallback(async () => {
+    if (!hasSupabaseEnv) {
+      setPlayStyleOptions(DEFAULT_PLAY_STYLE_OPTIONS);
+      return;
+    }
     const { data, error } = await supabase
       .from("play_style_tags")
       .select("name,is_active")
@@ -371,6 +380,10 @@ export default function Home() {
   }, []);
 
   const fetchMyApplications = useCallback(async () => {
+    if (!hasSupabaseEnv) {
+      setAppliedPostIds([]);
+      return;
+    }
     if (!currentUserId) {
       setAppliedPostIds([]);
       return;
@@ -420,6 +433,10 @@ export default function Home() {
   };
 
   const handleSignInWithDiscord = async () => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const { error } = await supabase.auth.signInWithOAuth({
       provider: "discord",
       options: {
@@ -434,6 +451,10 @@ export default function Home() {
   };
 
   const handleSignOut = async () => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const { error } = await supabase.auth.signOut();
     if (error) {
       console.error(error);
@@ -489,6 +510,10 @@ export default function Home() {
   };
 
   const handleSubmit = async () => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     if (!currentUserId) {
       alert("投稿するにはDiscordログインが必要です");
       return;
@@ -534,6 +559,10 @@ export default function Home() {
   };
 
   const handleDeletePost = async (postId: number) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     if (!currentUserId) return;
     const confirmed = confirm("この投稿を削除しますか？");
     if (!confirmed) return;
@@ -556,6 +585,10 @@ export default function Home() {
   };
 
   const handleSelect = async (postId: number, applicantUserId: string) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const confirmed = confirm("この応募者を選択しますか？");
     if (!confirmed) return;
 
@@ -577,6 +610,11 @@ export default function Home() {
   };
 
   const fetchApplicants = async (postId: number) => {
+    if (!hasSupabaseEnv) {
+      setApplicants([]);
+      setActivePostId(null);
+      return;
+    }
     const { data, error } = await supabase.from("applications").select("*").eq("post_id", postId);
 
     if (error) {
@@ -589,6 +627,10 @@ export default function Home() {
   };
 
   const handleApply = async (postId: number) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     if (!currentUserId) {
       alert("応募するにはDiscordログインが必要です");
       return;
@@ -819,6 +861,11 @@ export default function Home() {
       </header>
 
       <div className="mx-auto max-w-[1400px] px-4 pb-6 pt-4 sm:px-6 sm:pt-6">
+      {!hasSupabaseEnv && (
+        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+          {supabaseConfigMessage}
+        </div>
+      )}
 
       {!currentUserId && (
         <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-medium text-indigo-700">

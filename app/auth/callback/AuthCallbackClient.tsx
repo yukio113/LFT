@@ -2,15 +2,18 @@
 
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { supabase } from "../../../lib/supabase";
+import { hasSupabaseEnv, supabase, supabaseConfigMessage } from "../../../lib/supabase";
 
 export default function AuthCallbackClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const [message, setMessage] = useState("ログイン処理中...");
+  const [message, setMessage] = useState(
+    hasSupabaseEnv ? "ログイン処理中..." : supabaseConfigMessage
+  );
 
   useEffect(() => {
     let mounted = true;
+    if (!hasSupabaseEnv) return;
 
     const completeAuth = async () => {
       const code = searchParams.get("code");

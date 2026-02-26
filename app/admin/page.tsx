@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { User } from "@supabase/supabase-js";
-import { supabase } from "../../lib/supabase";
+import { hasSupabaseEnv, supabase, supabaseConfigMessage } from "../../lib/supabase";
 
 type AdminApplication = {
   id: number;
@@ -40,7 +40,7 @@ export default function AdminPage() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [posts, setPosts] = useState<AdminPost[]>([]);
   const [tags, setTags] = useState<PlayStyleTag[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(hasSupabaseEnv);
   const [query, setQuery] = useState("");
   const [newTagName, setNewTagName] = useState("");
   const [tagError, setTagError] = useState<string | null>(null);
@@ -52,6 +52,10 @@ export default function AdminPage() {
   }, [currentUser]);
 
   const fetchPosts = useCallback(async () => {
+    if (!hasSupabaseEnv) {
+      setPosts([]);
+      return;
+    }
     const { data, error } = await supabase
       .from("posts")
       .select(`
@@ -76,6 +80,11 @@ export default function AdminPage() {
   }, []);
 
   const fetchTags = useCallback(async () => {
+    if (!hasSupabaseEnv) {
+      setTagError(supabaseConfigMessage);
+      setTags([]);
+      return;
+    }
     const { data, error } = await supabase
       .from("play_style_tags")
       .select("id,name,is_active,created_at")
@@ -93,6 +102,7 @@ export default function AdminPage() {
 
   useEffect(() => {
     let mounted = true;
+    if (!hasSupabaseEnv) return;
 
     const bootstrap = async () => {
       const { data } = await supabase.auth.getSession();
@@ -124,6 +134,10 @@ export default function AdminPage() {
   }, [currentUser, isAdmin, fetchPosts, fetchTags]);
 
   const handleClosePost = async (postId: number) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const { error } = await supabase.from("posts").update({ is_closed: true }).eq("id", postId);
     if (error) {
       console.error(error);
@@ -134,6 +148,10 @@ export default function AdminPage() {
   };
 
   const handleReopenPost = async (postId: number) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const { error } = await supabase
       .from("posts")
       .update({ is_closed: false, winner_user_id: null })
@@ -147,6 +165,10 @@ export default function AdminPage() {
   };
 
   const handleDeletePost = async (postId: number) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const confirmed = confirm("この投稿を削除しますか？");
     if (!confirmed) return;
 
@@ -160,6 +182,10 @@ export default function AdminPage() {
   };
 
   const handleCreateTag = async () => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const name = newTagName.trim();
     if (!name) return;
 
@@ -175,6 +201,10 @@ export default function AdminPage() {
   };
 
   const handleToggleTag = async (tag: PlayStyleTag) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const { error } = await supabase
       .from("play_style_tags")
       .update({ is_active: !tag.is_active })
@@ -188,6 +218,10 @@ export default function AdminPage() {
   };
 
   const handleDeleteTag = async (tagId: string | number) => {
+    if (!hasSupabaseEnv) {
+      alert(supabaseConfigMessage);
+      return;
+    }
     const confirmed = confirm("このタグを削除しますか？");
     if (!confirmed) return;
 
@@ -221,6 +255,20 @@ export default function AdminPage() {
           <h1 className="mb-2 text-xl font-bold">管理者ページ</h1>
           <p className="mb-4 text-sm text-slate-700">アクセスにはログインが必要です。</p>
           <Link href="/" className="rounded-md bg-indigo-700 px-3 py-2 text-sm font-medium text-white">
+            トップへ戻る
+          </Link>
+        </div>
+      </main>
+    );
+  }
+
+  if (!hasSupabaseEnv) {
+    return (
+      <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
+        <div className="mx-auto max-w-xl rounded-xl border border-amber-300 bg-white p-6 shadow-sm">
+          <h1 className="mb-2 text-xl font-bold">管理者ページ</h1>
+          <p className="mb-4 text-sm text-amber-800">{supabaseConfigMessage}</p>
+          <Link href="/" className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white">
             トップへ戻る
           </Link>
         </div>
