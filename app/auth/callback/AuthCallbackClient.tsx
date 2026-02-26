@@ -1,14 +1,13 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { hasSupabaseEnv, supabase, supabaseConfigMessage } from "../../../lib/supabase";
 
 export default function AuthCallbackClient() {
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [message, setMessage] = useState(
-    hasSupabaseEnv ? "ログイン処理中..." : supabaseConfigMessage
+    hasSupabaseEnv ? "Completing login..." : supabaseConfigMessage
   );
 
   useEffect(() => {
@@ -16,6 +15,7 @@ export default function AuthCallbackClient() {
     if (!hasSupabaseEnv) return;
 
     const completeAuth = async () => {
+      const searchParams = new URLSearchParams(window.location.search);
       const code = searchParams.get("code");
       const hashParams = new URLSearchParams(window.location.hash.replace(/^#/, ""));
       const accessToken = hashParams.get("access_token");
@@ -25,7 +25,7 @@ export default function AuthCallbackClient() {
         const { error } = await supabase.auth.exchangeCodeForSession(code);
         if (error) {
           console.error(error);
-          if (mounted) setMessage("ログインに失敗しました。もう一度お試しください。");
+          if (mounted) setMessage("Login failed. Please try again.");
           return;
         }
       } else if (accessToken && refreshToken) {
@@ -35,13 +35,13 @@ export default function AuthCallbackClient() {
         });
         if (error) {
           console.error(error);
-          if (mounted) setMessage("ログインに失敗しました。もう一度お試しください。");
+          if (mounted) setMessage("Login failed. Please try again.");
           return;
         }
       }
 
       if (mounted) {
-        setMessage("ログイン成功。トップへ戻ります...");
+        setMessage("Login complete. Redirecting...");
       }
       router.replace("/");
       router.refresh();
@@ -52,7 +52,7 @@ export default function AuthCallbackClient() {
     return () => {
       mounted = false;
     };
-  }, [router, searchParams]);
+  }, [router]);
 
   return (
     <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
