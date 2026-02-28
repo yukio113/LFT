@@ -1,7 +1,11 @@
 import { NextResponse } from "next/server";
+import { createClient } from "@supabase/supabase-js";
 
 const DEFAULT_TRACKER_BASE_URL = "https://public-api.tracker.gg";
 const TRACKER_APEX_PROFILE_PATH = "/v2/apex/standard/profile";
+const PLAYER_ID_MAX_LENGTH = 64;
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const RATE_LIMIT_MAX_REQUESTS = 20;
 
 const PLATFORM_ALLOWLIST = new Set(["origin", "xbl", "psn"]);
 const TIER_KEY_MAP: Record<string, string> = {
@@ -35,8 +39,7 @@ const normalizeEnv = (value: string | undefined): string => {
   return value.trim().replace(/^['"]|['"]$/g, "");
 };
 
-const isUuidLike = (value: string): boolean =>
-  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value);
+const trackerProxyRequestCounters = new Map<string, { count: number; resetAt: number }>();
 
 const getNumberValue = (value: unknown): number | null => {
   if (typeof value === "number" && Number.isFinite(value)) return value;
@@ -130,12 +133,90 @@ const normalizeTrackerPayload = (payload: unknown, platform: string, playerId: s
   };
 };
 
+const getBearerToken = (request: Request): string | null => {
+  const header = request.headers.get("authorization");
+  if (!header) return null;
+  const [scheme, token] = header.split(" ");
+  if (!scheme || !token || scheme.toLowerCase() !== "bearer") return null;
+  return token.trim() || null;
+};
+
+const getRequestIp = (request: Request): string => {
+  const forwardedFor = request.headers.get("x-forwarded-for");
+  if (forwardedFor) {
+    const first = forwardedFor.split(",")[0]?.trim();
+    if (first) return first;
+  }
+  return "unknown-ip";
+};
+
+const enforceRateLimit = (key: string): { limited: boolean; retryAfterSeconds: number } => {
+  const now = Date.now();
+  const existing = trackerProxyRequestCounters.get(key);
+
+  if (!existing || now >= existing.resetAt) {
+    trackerProxyRequestCounters.set(key, {
+      count: 1,
+      resetAt: now + RATE_LIMIT_WINDOW_MS,
+    });
+    return { limited: false, retryAfterSeconds: Math.ceil(RATE_LIMIT_WINDOW_MS / 1000) };
+  }
+
+  if (existing.count >= RATE_LIMIT_MAX_REQUESTS) {
+    return { limited: true, retryAfterSeconds: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)) };
+  }
+
+  existing.count += 1;
+  trackerProxyRequestCounters.set(key, existing);
+  return { limited: false, retryAfterSeconds: Math.max(1, Math.ceil((existing.resetAt - now) / 1000)) };
+};
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const platform = (searchParams.get("platform") ?? "").trim().toLowerCase();
   const playerId = (searchParams.get("playerId") ?? "").trim();
   const apiKey = normalizeEnv(process.env.TRN_API_KEY || process.env.TRACKER_API_KEY);
   const baseUrl = normalizeEnv(process.env.TRACKER_API_BASE_URL) || DEFAULT_TRACKER_BASE_URL;
+  const supabaseUrl = normalizeEnv(process.env.NEXT_PUBLIC_SUPABASE_URL);
+  const supabaseAnonKey = normalizeEnv(process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY);
+
+  if (!supabaseUrl || !supabaseAnonKey) {
+    return NextResponse.json(
+      { error: "Supabase environment variables are not configured on server." },
+      { status: 500 }
+    );
+  }
+
+  const bearerToken = getBearerToken(request);
+  if (!bearerToken) {
+    return NextResponse.json({ error: "Authentication is required." }, { status: 401 });
+  }
+
+  const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+    auth: {
+      autoRefreshToken: false,
+      persistSession: false,
+    },
+  });
+  const { data: authData, error: authError } = await supabase.auth.getUser(bearerToken);
+  if (authError || !authData.user?.id) {
+    return NextResponse.json({ error: "Authentication failed." }, { status: 401 });
+  }
+
+  const requesterId = authData.user.id;
+  const rateLimitKey = `${requesterId}:${getRequestIp(request)}`;
+  const rateLimit = enforceRateLimit(rateLimitKey);
+  if (rateLimit.limited) {
+    return NextResponse.json(
+      { error: "Too many requests. Please try again later." },
+      {
+        status: 429,
+        headers: {
+          "Retry-After": String(rateLimit.retryAfterSeconds),
+        },
+      }
+    );
+  }
 
   if (!apiKey) {
     return NextResponse.json(
@@ -157,6 +238,12 @@ export async function GET(request: Request) {
   if (!playerId) {
     return NextResponse.json({ error: "playerId is required." }, { status: 400 });
   }
+  if (playerId.length > PLAYER_ID_MAX_LENGTH) {
+    return NextResponse.json(
+      { error: `playerId must be ${PLAYER_ID_MAX_LENGTH} characters or less.` },
+      { status: 400 }
+    );
+  }
 
   const endpoint = `${baseUrl}${TRACKER_APEX_PROFILE_PATH}/${platform}/${encodeURIComponent(playerId)}`;
   const upstream = await fetch(endpoint, {
@@ -170,30 +257,17 @@ export async function GET(request: Request) {
   });
 
   if (!upstream.ok) {
-    const body = await upstream.text().catch(() => "");
-    const details = body.slice(0, 500);
-
     if (upstream.status === 401) {
       return NextResponse.json(
         {
           error: "Tracker API authentication failed (401).",
-          details,
-          debug: {
-            endpoint,
-            keyLength: apiKey.length,
-            keyLooksLikeUuid: isUuidLike(apiKey),
-            usingFallbackEnvName: !process.env.TRN_API_KEY && Boolean(process.env.TRACKER_API_KEY),
-          },
-          hint: "Verify the value expected by Tracker dashboard (App ID/API key), access approval, and restart server after updating env.",
+          hint: "Verify server-side Tracker API credentials and access approval.",
         },
         { status: 401 }
       );
     }
 
-    return NextResponse.json(
-      { error: `Tracker API failed with status ${upstream.status}.`, details },
-      { status: upstream.status }
-    );
+    return NextResponse.json({ error: `Tracker API failed with status ${upstream.status}.` }, { status: upstream.status });
   }
 
   const payload = await upstream.json();

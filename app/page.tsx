@@ -4,7 +4,24 @@ import { useCallback, useEffect, useState } from "react";
 import { hasSupabaseEnv, supabase, supabaseConfigMessage } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Image from "next/image";
-import Link from "next/link";
+
+type TrackerPlatform = "origin" | "xbl" | "psn";
+
+type TrackerProfile = {
+  trackerPlatform: string;
+  trackerHandle: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  currentRankTier: string | null;
+  currentRankDivision: number | null;
+  maxRankTier: string | null;
+  maxRankDivision: number | null;
+  level: number | null;
+  rankScore: number | null;
+  kills: number | null;
+  damage: number | null;
+  raw: unknown;
+};
 
 type Post = {
   id: number;
@@ -59,10 +76,17 @@ type FinalizePayload = {
 type UserProfile = {
   user_id: string;
   tracker_platform: string | null;
+  tracker_handle: string | null;
+  display_name: string | null;
+  avatar_url: string | null;
   current_rank_tier: string | null;
   current_rank_division: number | null;
   max_rank_tier: string | null;
   max_rank_division: number | null;
+  tracker_level: number | null;
+  tracker_rank_score: number | null;
+  tracker_kills: number | null;
+  tracker_damage: number | null;
   age_group: string | null;
 };
 
@@ -87,12 +111,6 @@ type FormState = {
   vcType: string;
   playStyles: string[];
   otherText: string;
-  currentRankTier: string;
-  currentRankDivision: number | null;
-  maxRankTier: string;
-  maxRankDivision: number | null;
-  ageGroup: string;
-  platform: string;
 };
 
 type PostFilter = {
@@ -119,7 +137,7 @@ type PostFilter = {
   maxRankTier: "all" | "none" | "bronze" | "silver" | "gold" | "platinum" | "diamond" | "master" | "predator";
   maxRankDivision: "all" | "1" | "2" | "3" | "4";
   posterAgeGroup: "all" | "10s" | "20s" | "30s" | "40s";
-  posterPlatform: "all" | "origin" | "xbl" | "psn";
+  posterPlatform: "all" | "origin" | "psn";
 };
 
 const POST_EXPIRY_MS = 2 * 60 * 60 * 1000;
@@ -134,6 +152,10 @@ const AGE_GROUP_OPTIONS = [
 const PLATFORM_OPTIONS = [
   { value: "origin", label: "PC (Origin/EA app)" },
   { value: "xbl", label: "Xbox" },
+  { value: "psn", label: "PlayStation" },
+];
+const TRACKER_PLATFORM_OPTIONS: { value: TrackerPlatform; label: string }[] = [
+  { value: "origin", label: "PC" },
   { value: "psn", label: "PlayStation" },
 ];
 const MIN_RANK_TIER_OPTIONS = [
@@ -310,12 +332,6 @@ const DEFAULT_FORM: FormState = {
   vcType: "game",
   playStyles: [],
   otherText: "",
-  currentRankTier: "",
-  currentRankDivision: null,
-  maxRankTier: "",
-  maxRankDivision: null,
-  ageGroup: "",
-  platform: "",
 };
 const DEFAULT_FILTER: PostFilter = {
   title: "",
@@ -345,7 +361,6 @@ export default function Home() {
   const [now, setNow] = useState(INITIAL_NOW);
   const [currentUser, setCurrentUser] = useState<User | null>(null);
   const [form, setForm] = useState<FormState>(DEFAULT_FORM);
-  const [formTab, setFormTab] = useState<"recruit" | "profile">("recruit");
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [postFilter, setPostFilter] = useState<PostFilter>(DEFAULT_FILTER);
   const [filterTab, setFilterTab] = useState<"recruit" | "poster">("recruit");
@@ -359,7 +374,22 @@ export default function Home() {
   const [applicationResults, setApplicationResults] = useState<ApplicationResult[]>([]);
   const [activePostId, setActivePostId] = useState<number | null>(null);
   const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
+  const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [trackerPlatform, setTrackerPlatform] = useState<TrackerPlatform>("origin");
+  const [trackerPlayerId, setTrackerPlayerId] = useState("");
+  const [trackerFetchedProfile, setTrackerFetchedProfile] = useState<TrackerProfile | null>(null);
+  const [trackerLoading, setTrackerLoading] = useState(false);
+  const [trackerSaving, setTrackerSaving] = useState(false);
+  const [trackerMessage, setTrackerMessage] = useState<string | null>(null);
+  const [trackerError, setTrackerError] = useState<string | null>(null);
+  const [profileDisplayName, setProfileDisplayName] = useState("");
+  const [profileCurrentRankTier, setProfileCurrentRankTier] = useState("");
+  const [profileCurrentRankDivision, setProfileCurrentRankDivision] = useState<number | null>(null);
+  const [profileMaxRankTier, setProfileMaxRankTier] = useState("");
+  const [profileMaxRankDivision, setProfileMaxRankDivision] = useState<number | null>(null);
+  const [profileAgeGroup, setProfileAgeGroup] = useState("");
   const currentUserId = currentUser?.id ?? null;
+  const canFetchTracker = Boolean(hasSupabaseEnv && currentUserId && trackerPlayerId.trim().length > 0);
 
   const updateForm = <K extends keyof FormState>(key: K, value: FormState[K]) => {
     setForm((prev) => ({ ...prev, [key]: value }));
@@ -495,7 +525,9 @@ export default function Home() {
 
     const { data, error } = await supabase
       .from("profiles")
-      .select("user_id,tracker_platform,current_rank_tier,current_rank_division,max_rank_tier,max_rank_division,age_group")
+      .select(
+        "user_id,tracker_platform,tracker_handle,display_name,avatar_url,current_rank_tier,current_rank_division,max_rank_tier,max_rank_division,tracker_level,tracker_rank_score,tracker_kills,tracker_damage,age_group"
+      )
       .eq("user_id", currentUserId)
       .maybeSingle();
 
@@ -558,15 +590,7 @@ export default function Home() {
   };
 
   const resetForm = () => {
-    setForm({
-      ...DEFAULT_FORM,
-      currentRankTier: toTierKey(userProfile?.current_rank_tier) ?? "",
-      currentRankDivision: userProfile?.current_rank_division ?? null,
-      maxRankTier: toTierKey(userProfile?.max_rank_tier) ?? "",
-      maxRankDivision: userProfile?.max_rank_division ?? null,
-      ageGroup: toAgeKey(userProfile?.age_group ?? "") || "",
-      platform: toPlatformKey(userProfile?.tracker_platform) ?? "",
-    });
+    setForm(DEFAULT_FORM);
   };
 
   const handleSignInWithDiscord = async () => {
@@ -605,6 +629,139 @@ export default function Home() {
     setActiveApplicantIndex(0);
     setFinalizePayloadByPost({});
     setApplicationResults([]);
+    setIsProfileModalOpen(false);
+    setTrackerFetchedProfile(null);
+    setTrackerMessage(null);
+    setTrackerError(null);
+  };
+
+  const handleOpenProfileModal = () => {
+    setTrackerPlatform(toPlatformKey(userProfile?.tracker_platform) ?? "origin");
+    setTrackerPlayerId(userProfile?.tracker_handle ?? "");
+    setProfileDisplayName(userProfile?.display_name ?? "");
+    setProfileCurrentRankTier(toTierKey(userProfile?.current_rank_tier) ?? "");
+    setProfileCurrentRankDivision(userProfile?.current_rank_division ?? null);
+    setProfileMaxRankTier(toTierKey(userProfile?.max_rank_tier) ?? "");
+    setProfileMaxRankDivision(userProfile?.max_rank_division ?? null);
+    setProfileAgeGroup(toAgeKey(userProfile?.age_group ?? "") || "");
+    setTrackerFetchedProfile(null);
+    setTrackerMessage(null);
+    setTrackerError(null);
+    setIsProfileModalOpen(true);
+  };
+
+  const handleManualRankTierChange = (key: "current" | "max", tier: string) => {
+    const normalizedDivision = tier === "" || tier === "master" || tier === "predator" ? null : 4;
+    if (key === "current") {
+      setProfileCurrentRankTier(tier);
+      setProfileCurrentRankDivision((prev) => (normalizedDivision === null ? null : (prev ?? 4)));
+      return;
+    }
+    setProfileMaxRankTier(tier);
+    setProfileMaxRankDivision((prev) => (normalizedDivision === null ? null : (prev ?? 4)));
+  };
+
+  const handleFetchTrackerProfile = async () => {
+    if (!canFetchTracker) return;
+    setTrackerLoading(true);
+    setTrackerMessage(null);
+    setTrackerError(null);
+
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const accessToken = session?.access_token;
+      if (!accessToken) {
+        throw new Error("ログインセッションが無効です。再ログインしてください");
+      }
+
+      const response = await fetch(
+        `/api/tracker/apex?platform=${encodeURIComponent(trackerPlatform)}&playerId=${encodeURIComponent(trackerPlayerId.trim())}`,
+        {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+        }
+      );
+      const data = await response.json();
+      if (!response.ok) {
+        throw new Error(data?.error ?? "Tracker APIの取得に失敗しました");
+      }
+
+      const fetched = data?.profile as TrackerProfile | undefined;
+      if (!fetched) {
+        throw new Error("Tracker APIから有効なプロフィール情報を取得できませんでした");
+      }
+
+      setTrackerFetchedProfile(fetched);
+      setProfileDisplayName(fetched.displayName ?? userProfile?.display_name ?? "");
+      setProfileCurrentRankTier(fetched.currentRankTier ?? "");
+      setProfileCurrentRankDivision(fetched.currentRankDivision ?? null);
+      setProfileMaxRankTier(fetched.maxRankTier ?? "");
+      setProfileMaxRankDivision(fetched.maxRankDivision ?? null);
+      setTrackerMessage("Tracker Networkから取得しました。内容を確認して保存できます。");
+    } catch (error) {
+      console.error(error);
+      setTrackerError(error instanceof Error ? error.message : "プロフィール取得に失敗しました");
+    } finally {
+      setTrackerLoading(false);
+    }
+  };
+
+  const handleSaveTrackerProfile = async () => {
+    if (!hasSupabaseEnv) {
+      setTrackerError(supabaseConfigMessage);
+      return;
+    }
+    if (!currentUserId) {
+      setTrackerError("ログインが必要です");
+      return;
+    }
+
+    const source = trackerFetchedProfile;
+    setTrackerSaving(true);
+    setTrackerError(null);
+    setTrackerMessage(null);
+
+    const payload = {
+      user_id: currentUserId,
+      tracker_platform: trackerPlatform,
+      tracker_handle: trackerPlayerId.trim() || null,
+      display_name: profileDisplayName.trim() || null,
+      avatar_url: source?.avatarUrl ?? userProfile?.avatar_url ?? null,
+      current_rank_tier: profileCurrentRankTier || null,
+      current_rank_division:
+        profileCurrentRankTier === "" || profileCurrentRankTier === "master" || profileCurrentRankTier === "predator"
+          ? null
+          : (profileCurrentRankDivision ?? 4),
+      max_rank_tier: profileMaxRankTier || null,
+      max_rank_division:
+        profileMaxRankTier === "" || profileMaxRankTier === "master" || profileMaxRankTier === "predator"
+          ? null
+          : (profileMaxRankDivision ?? 4),
+      tracker_level: source?.level ?? null,
+      tracker_rank_score: source?.rankScore ?? null,
+      tracker_kills: source?.kills ?? null,
+      tracker_damage: source?.damage ?? null,
+      tracker_raw: source?.raw ?? null,
+      age_group: profileAgeGroup || null,
+      updated_at: new Date().toISOString(),
+    };
+
+    const { error } = await supabase.from("profiles").upsert(payload, { onConflict: "user_id" });
+    if (error) {
+      console.error(error);
+      setTrackerError("プロフィール保存に失敗しました");
+      setTrackerSaving(false);
+      return;
+    }
+
+    setTrackerMessage("プロフィールを保存しました");
+    setTrackerFetchedProfile(null);
+    setTrackerSaving(false);
+    await fetchUserProfile();
   };
 
   const handleMinRankTierChange = (tier: string) => {
@@ -630,26 +787,6 @@ export default function Home() {
     });
   };
 
-  const handleProfileRankTierChange = (key: "currentRankTier" | "maxRankTier", tier: string) => {
-    setForm((prev) => ({
-      ...prev,
-      [key]: tier,
-      ...(key === "currentRankTier"
-        ? {
-            currentRankDivision:
-              tier === "" || tier === "master" || tier === "predator"
-                ? null
-                : (prev.currentRankDivision ?? 4),
-          }
-        : {
-            maxRankDivision:
-              tier === "" || tier === "master" || tier === "predator"
-                ? null
-                : (prev.maxRankDivision ?? 4),
-          }),
-    }));
-  };
-
   const handleSubmit = async () => {
     if (!hasSupabaseEnv) {
       alert(supabaseConfigMessage);
@@ -666,6 +803,10 @@ export default function Home() {
     if (!form.title) return alert("タイトルは必須です");
     if (form.playStyles.length === 0) return alert("プレイスタイルを1つ以上選択してください");
     if (form.playStyles.length > 3) return alert("プレイスタイルタグは最大3つまでです");
+    const profileAgeLabel = userProfile?.age_group ? toAgeLabel(userProfile.age_group) : "未設定";
+    const profileCurrentRankTier = userProfile?.current_rank_tier ? toTierLabel(userProfile.current_rank_tier) : null;
+    const profileMaxRankTier = userProfile?.max_rank_tier ? toTierLabel(userProfile.max_rank_tier) : null;
+    const profilePlatform = toPlatformKey(userProfile?.tracker_platform ?? "") || null;
 
     const { error } = await supabase.from("posts").insert([
       {
@@ -678,12 +819,12 @@ export default function Home() {
         vc_type: toVcLabel(form.vcType),
         play_styles: form.playStyles,
         other_text: form.otherText,
-        age_group: toAgeLabel(form.ageGroup),
-        current_rank_tier: form.currentRankTier ? toTierLabel(form.currentRankTier) : null,
-        current_rank_division: form.currentRankDivision || null,
-        max_rank_tier: form.maxRankTier ? toTierLabel(form.maxRankTier) : null,
-        max_rank_division: form.maxRankDivision || null,
-        platform: form.platform || null,
+        age_group: profileAgeLabel,
+        current_rank_tier: profileCurrentRankTier,
+        current_rank_division: userProfile?.current_rank_division ?? null,
+        max_rank_tier: profileMaxRankTier,
+        max_rank_division: userProfile?.max_rank_division ?? null,
+        platform: profilePlatform,
         user_id: currentUserId,
       },
     ]);
@@ -695,7 +836,6 @@ export default function Home() {
     }
 
     resetForm();
-    setFormTab("recruit");
     setIsCreateModalOpen(false);
     await fetchPosts();
   };
@@ -1100,38 +1240,39 @@ export default function Home() {
   const myActivePost = visiblePosts.find(({ post }) => post.user_id === currentUserId)?.post ?? null;
 
   return (
-    <main className="min-h-screen bg-slate-100 text-slate-900">
-      <header className="sticky top-0 z-40 border-b border-slate-300 bg-white/95 backdrop-blur">
+    <main className="apex-shell min-h-screen bg-[#1f1d1c] text-[#f4ede1]">
+      <header className="apex-header sticky top-0 z-40 border-b border-[#4a3330] bg-[#151313]/95 backdrop-blur">
         <div className="mx-auto flex max-w-[1400px] flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-6 sm:py-4">
           <div className="flex items-center gap-2">
             <div>
-              <h1 className="text-xl font-bold tracking-tight text-slate-950 sm:text-2xl">LFT</h1>
-              <p className="text-[11px] font-medium text-slate-600 sm:text-xs">Looking For Team</p>
+              <h1 className="apex-title text-xl font-bold uppercase text-[#f4ede1] sm:text-2xl">LFT</h1>
+              <p className="apex-subtitle text-[11px] font-semibold sm:text-xs">Looking For Team</p>
             </div>
           </div>
           {currentUser ? (
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:items-center">
-              <span className="max-w-full truncate text-sm text-slate-700 sm:max-w-[420px]">
+              <span className="max-w-full truncate text-sm text-[#bcae9d] sm:max-w-[420px]">
                 ログイン中: {currentUser.user_metadata?.full_name ?? currentUser.email ?? currentUser.id}
               </span>
-              <Link
-                href="/profile"
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-medium text-slate-800 hover:bg-slate-100 sm:w-auto"
+              <button
+                type="button"
+                onClick={handleOpenProfileModal}
+                className="w-full rounded-md border border-[#4a3330] bg-[#151313] px-3 py-2 text-center text-sm font-medium text-[#e3d8c9] hover:bg-[#1f1d1c] sm:w-auto"
               >
                 プロフィール
-              </Link>
+              </button>
               <button
                 type="button"
                 onClick={() => setIsCreateModalOpen(true)}
                 disabled={!currentUserId || Boolean(myActivePost)}
-                className="w-full rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-400 sm:w-auto"
+                className="apex-cta w-full rounded-md bg-[#da292a] px-3 py-2 text-sm font-medium tracking-wide text-white hover:bg-[#f15c43] disabled:cursor-not-allowed disabled:bg-[#6b4a45] sm:w-auto"
               >
                 {!currentUserId ? "ログインして投稿" : myActivePost ? "投稿中" : "投稿を作成"}
               </button>
               <button
                 type="button"
                 onClick={handleSignOut}
-                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 hover:bg-slate-100 sm:w-auto"
+                className="w-full rounded-md border border-[#4a3330] bg-[#151313] px-3 py-2 text-sm font-medium text-[#e3d8c9] hover:bg-[#1f1d1c] sm:w-auto"
               >
                 ログアウト
               </button>
@@ -1141,7 +1282,7 @@ export default function Home() {
               <button
                 type="button"
                 onClick={handleSignInWithDiscord}
-                className="w-full rounded-md bg-indigo-700 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-800 sm:w-auto"
+                className="apex-cta w-full rounded-md bg-[#da292a] px-3 py-2 text-sm font-medium tracking-wide text-white hover:bg-[#f15c43] sm:w-auto"
               >
                 Discordでログイン
               </button>
@@ -1149,7 +1290,7 @@ export default function Home() {
                 type="button"
                 onClick={() => setIsCreateModalOpen(true)}
                 disabled
-                className="w-full rounded-md bg-emerald-700 px-3 py-2 text-sm font-medium text-white disabled:cursor-not-allowed disabled:bg-slate-400 sm:w-auto"
+                className="apex-cta w-full rounded-md bg-[#da292a] px-3 py-2 text-sm font-medium tracking-wide text-white disabled:cursor-not-allowed disabled:bg-[#6b4a45] sm:w-auto"
               >
                 ログインして投稿
               </button>
@@ -1160,18 +1301,18 @@ export default function Home() {
 
       <div className="mx-auto max-w-[1400px] px-4 pb-6 pt-4 sm:px-6 sm:pt-6">
       {!hasSupabaseEnv && (
-        <div className="mb-4 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        <div className="mb-4 rounded-md border border-[#6a3f36] bg-[#2d1d1a] px-3 py-2 text-sm text-[#ffb08a]">
           {supabaseConfigMessage}
         </div>
       )}
 
       {!currentUserId && (
-        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-medium text-indigo-700">
+        <div className="mb-4 flex flex-wrap items-center gap-2 text-xs font-medium text-[#ffb08a]">
           <span>投稿・応募にはDiscordログインが必要です。</span>
           <button
             type="button"
             onClick={handleSignInWithDiscord}
-            className="rounded border border-indigo-300 bg-indigo-50 px-2 py-1 text-indigo-800 hover:bg-indigo-100"
+            className="rounded border border-[#6a3f36] bg-[#2d1d1a] px-2 py-1 text-[#ffb08a] hover:bg-[#4d251f]"
           >
             ログインをやり直す
           </button>
@@ -1179,24 +1320,24 @@ export default function Home() {
       )}
 
       {myActivePost && (
-        <p className="mb-4 text-xs font-medium text-amber-700">
+        <p className="mb-4 text-xs font-medium text-[#ffb08a]">
           同時に出せる投稿は1件のみです。修正する場合は「削除 → 再投稿」で対応してください。
         </p>
       )}
 
       {currentUserId && applicationResults.length > 0 && (
-        <section className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 sm:p-4">
-          <h2 className="mb-2 text-sm font-semibold text-slate-900">応募結果のお知らせ</h2>
+        <section className="apex-panel mb-4 rounded-xl border border-[#6a3f36] bg-[#221816]/70 p-3 sm:p-4">
+          <h2 className="mb-2 text-sm font-semibold text-[#f4ede1]">応募結果のお知らせ</h2>
           <div className="space-y-2">
             {applicationResults.slice(0, 5).map((result) => (
-              <article key={result.id} className="rounded-md border border-indigo-200 bg-white p-3 text-sm text-slate-800">
-                <p className="font-semibold text-slate-900">{result.post_title}</p>
-                <p className={`mt-1 text-xs font-semibold ${result.status === "selected" ? "text-emerald-700" : "text-rose-700"}`}>
+              <article key={result.id} className="rounded-md border border-[#6a3f36] bg-[#151313] p-3 text-sm text-[#e3d8c9]">
+                <p className="font-semibold text-[#f4ede1]">{result.post_title}</p>
+                <p className={`mt-1 text-xs font-semibold ${result.status === "selected" ? "text-[#f2c879]" : "text-[#ff9a8e]"}`}>
                   {result.status === "selected" ? "募集者に選ばれました" : "今回は選ばれませんでした"}
                 </p>
-                {result.message && <p className="mt-2 whitespace-pre-wrap text-xs text-slate-700">{result.message}</p>}
+                {result.message && <p className="mt-2 whitespace-pre-wrap text-xs text-[#bcae9d]">{result.message}</p>}
                 {result.status === "selected" && (
-                  <div className="mt-2 grid gap-1 text-xs text-slate-700 sm:grid-cols-2">
+                  <div className="mt-2 grid gap-1 text-xs text-[#bcae9d] sm:grid-cols-2">
                     <p>EAアカウント名: {result.ea_account_name || "未設定"}</p>
                     {toVcKey(result.vc_type ?? "") === "discord" ? (
                       <p className="break-all">Discord招待: {result.discord_invite_link || "未設定"}</p>
@@ -1205,7 +1346,7 @@ export default function Home() {
                     )}
                   </div>
                 )}
-                <p className="mt-2 text-[11px] text-slate-500">
+                <p className="mt-2 text-[11px] text-[#7e6f62]">
                   通知日時: {new Date(result.created_at).toLocaleString("ja-JP")}
                 </p>
               </article>
@@ -1214,21 +1355,201 @@ export default function Home() {
         </section>
       )}
 
+      {isProfileModalOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-end justify-center bg-[#151313]/45 p-2 sm:items-center sm:p-4"
+          onClick={() => setIsProfileModalOpen(false)}
+        >
+          <div
+            className="apex-panel max-h-[92vh] w-full max-w-2xl overflow-y-auto rounded-t-xl border border-[#4a3330] bg-[#151313] p-3 shadow-xl sm:rounded-xl sm:p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="text-base font-semibold text-[#f4ede1]">プロフィール設定</h2>
+              <button
+                type="button"
+                onClick={() => setIsProfileModalOpen(false)}
+                className="rounded-md border border-[#4a3330] bg-[#1f1d1c] px-2 py-1 text-sm text-[#bcae9d] hover:bg-[#2a2422]"
+              >
+                閉じる
+              </button>
+            </div>
+
+            {!currentUserId && (
+              <p className="mb-3 rounded border border-[#6a3f36] bg-[#2d1d1a] px-3 py-2 text-sm text-[#ffb08a]">
+                プロフィール編集にはログインが必要です。
+              </p>
+            )}
+
+            <section className="apex-panel mt-3 space-y-3 rounded-lg border border-[#4a3330] bg-[#1d1917]/70 p-3">
+              <h3 className="text-sm font-semibold text-[#f4ede1]">手入力プロフィール</h3>
+
+              <div className="grid gap-2 sm:grid-cols-2">
+                <label className="text-xs font-semibold text-[#e3d8c9] sm:col-span-2">表示名</label>
+                <input
+                  type="text"
+                  value={profileDisplayName}
+                  onChange={(e) => setProfileDisplayName(e.target.value)}
+                  placeholder="例: YourID123"
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] placeholder:text-[#7e6f62] sm:col-span-2"
+                />
+
+                <label className="text-xs font-semibold text-[#e3d8c9] sm:col-span-2">APEXでのプレイヤー名</label>
+                <input
+                  type="text"
+                  value={trackerPlayerId}
+                  onChange={(e) => setTrackerPlayerId(e.target.value)}
+                  placeholder="例: ApexPlayer123"
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] placeholder:text-[#7e6f62] sm:col-span-2"
+                />
+
+                <label className="text-xs font-semibold text-[#e3d8c9] sm:col-span-2">普段プレイしているプラットフォーム</label>
+                <select
+                  value={trackerPlatform}
+                  onChange={(e) => setTrackerPlatform(e.target.value as TrackerPlatform)}
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] sm:col-span-2"
+                >
+                  {TRACKER_PLATFORM_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="text-xs font-semibold text-[#e3d8c9]">現在ランク</label>
+                <label className="text-xs font-semibold text-[#e3d8c9]">現在ランク division</label>
+                <select
+                  value={profileCurrentRankTier}
+                  onChange={(e) => handleManualRankTierChange("current", e.target.value)}
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
+                >
+                  {PROFILE_RANK_TIER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={profileCurrentRankDivision ?? 4}
+                  onChange={(e) => setProfileCurrentRankDivision(Number(e.target.value))}
+                  disabled={profileCurrentRankTier === "" || profileCurrentRankTier === "master" || profileCurrentRankTier === "predator"}
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {MIN_RANK_DIVISION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="text-xs font-semibold text-[#e3d8c9]">最高到達ランク</label>
+                <label className="text-xs font-semibold text-[#e3d8c9]">最高到達ランク division</label>
+                <select
+                  value={profileMaxRankTier}
+                  onChange={(e) => handleManualRankTierChange("max", e.target.value)}
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
+                >
+                  {PROFILE_RANK_TIER_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+                <select
+                  value={profileMaxRankDivision ?? 4}
+                  onChange={(e) => setProfileMaxRankDivision(Number(e.target.value))}
+                  disabled={profileMaxRankTier === "" || profileMaxRankTier === "master" || profileMaxRankTier === "predator"}
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {MIN_RANK_DIVISION_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+
+                <label className="text-xs font-semibold text-[#e3d8c9] sm:col-span-2">年齢層</label>
+                <select
+                  value={profileAgeGroup}
+                  onChange={(e) => setProfileAgeGroup(e.target.value)}
+                  className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] sm:col-span-2"
+                >
+                  <option value="">未設定</option>
+                  {AGE_GROUP_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={handleSaveTrackerProfile}
+                  disabled={!currentUserId || trackerSaving}
+                  className="apex-cta rounded-md bg-[#da292a] px-3 py-1.5 text-sm font-medium tracking-wide text-white hover:bg-[#f15c43] disabled:cursor-not-allowed disabled:bg-[#6b4a45]"
+                >
+                  {trackerSaving ? "保存中..." : "プロフィール保存"}
+                </button>
+              </div>
+            </section>
+
+            {trackerError && (
+              <p className="mt-3 rounded border border-[#6a3f36] bg-[#2d1d1a] px-3 py-2 text-sm text-[#ff9a8e]">{trackerError}</p>
+            )}
+            {trackerMessage && (
+              <p className="mt-3 rounded border border-[#6a3f36] bg-[#2d1d1a] px-3 py-2 text-sm text-[#f2c879]">{trackerMessage}</p>
+            )}
+
+            <section className="apex-panel mt-3 space-y-2 rounded-lg border border-[#4a3330] bg-[#1d1917]/70 p-3">
+              <h3 className="text-sm font-semibold text-[#f4ede1]">保存済みプロフィール</h3>
+              {userProfile ? (
+                <dl className="grid grid-cols-1 gap-2 text-sm text-[#e3d8c9] sm:grid-cols-2">
+                  <div>
+                    <dt className="text-xs text-[#9c8d7d]">表示名</dt>
+                    <dd>{userProfile.display_name ?? "-"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-[#9c8d7d]">APEXでのプレイヤー名</dt>
+                    <dd>{userProfile.tracker_handle ?? "-"}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-[#9c8d7d]">現在ランク</dt>
+                    <dd>{formatRank(userProfile.current_rank_tier ?? undefined, userProfile.current_rank_division ?? undefined)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-[#9c8d7d]">最高到達ランク</dt>
+                    <dd>{formatRank(userProfile.max_rank_tier ?? undefined, userProfile.max_rank_division ?? undefined)}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-[#9c8d7d]">年齢層</dt>
+                    <dd>{toAgeLabel(userProfile.age_group ?? "") || "-"}</dd>
+                  </div>
+                </dl>
+              ) : (
+                <p className="text-sm text-[#bcae9d]">まだプロフィールは保存されていません。</p>
+              )}
+            </section>
+
+          </div>
+        </div>
+      )}
+
       {isCreateModalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-end justify-center bg-slate-900/45 p-2 sm:items-center sm:p-4"
+          className="fixed inset-0 z-50 flex items-end justify-center bg-[#151313]/45 p-2 sm:items-center sm:p-4"
           onClick={() => setIsCreateModalOpen(false)}
         >
           <div
-            className="max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-t-xl border border-slate-300 bg-white p-3 shadow-xl sm:rounded-xl sm:p-4"
+            className="apex-panel max-h-[92vh] w-full max-w-3xl overflow-y-auto rounded-t-xl border border-[#4a3330] bg-[#151313] p-3 shadow-xl sm:rounded-xl sm:p-4"
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-2 flex items-center justify-between">
-              <h2 className="text-base font-semibold text-slate-900">投稿を作成</h2>
+              <h2 className="text-base font-semibold text-[#f4ede1]">投稿を作成</h2>
               <button
                 type="button"
                 onClick={() => setIsCreateModalOpen(false)}
-                className="rounded-md border border-slate-300 bg-slate-100 px-2 py-1 text-sm text-slate-700 hover:bg-slate-200"
+                className="rounded-md border border-[#4a3330] bg-[#1f1d1c] px-2 py-1 text-sm text-[#bcae9d] hover:bg-[#2a2422]"
               >
                 閉じる
               </button>
@@ -1236,73 +1557,55 @@ export default function Home() {
 
       <div className="space-y-3">
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
-          <div className="inline-flex w-full rounded-lg border border-slate-300 bg-slate-100 p-1 sm:w-auto">
-            <button
-              type="button"
-              onClick={() => setFormTab("recruit")}
-              className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium sm:flex-none ${
-                formTab === "recruit" ? "bg-white text-slate-900 shadow-sm" : "text-slate-700"
-              }`}
-            >
-              募集内容
-            </button>
-            <button
-              type="button"
-              onClick={() => setFormTab("profile")}
-              className={`flex-1 rounded-md px-3 py-1.5 text-sm font-medium sm:flex-none ${
-                formTab === "profile" ? "bg-white text-slate-900 shadow-sm" : "text-slate-700"
-              }`}
-            >
-              投稿者情報
-            </button>
-          </div>
+          <span className="text-xs text-[#bcae9d]">
+            投稿者情報はプロフィール設定の内容を自動で反映します。
+          </span>
           <button
             onClick={handleSubmit}
             disabled={Boolean(myActivePost)}
-            className="w-full rounded-lg bg-emerald-700 px-4 py-2 text-sm font-medium text-white hover:bg-emerald-800 disabled:cursor-not-allowed disabled:bg-slate-400 sm:w-auto"
+            className="apex-cta w-full rounded-lg bg-[#da292a] px-4 py-2 text-sm font-medium tracking-wide text-white hover:bg-[#f15c43] disabled:cursor-not-allowed disabled:bg-[#6b4a45] sm:w-auto"
           >
             {myActivePost ? "投稿中（削除後に再投稿）" : "投稿する"}
           </button>
         </div>
 
-        {formTab === "recruit" && (
-          <section className="space-y-3 rounded-lg border border-blue-200 bg-blue-50/40 p-3">
-            <h2 className="text-sm font-semibold text-slate-900">募集内容</h2>
+          <section className="apex-panel space-y-3 rounded-lg border border-[#6a3f36] bg-[#221816]/70 p-3">
+            <h2 className="text-sm font-semibold text-[#f4ede1]">募集内容</h2>
             <div className="grid gap-2 sm:grid-cols-2">
-              <p className="text-xs font-semibold text-slate-800 sm:col-span-2">タイトル（必須）</p>
+              <p className="text-xs font-semibold text-[#e3d8c9] sm:col-span-2">タイトル（必須）</p>
               <input
                 type="text"
                 placeholder="タイトル"
                 value={form.title}
                 onChange={(e) => updateForm("title", e.target.value)}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 placeholder:text-slate-500 sm:col-span-2"
+                className="w-full rounded border border-[#6b4a45] bg-[#151313] p-2 text-[#f4ede1] placeholder:text-[#7e6f62] sm:col-span-2"
               />
 
-              <p className="text-xs font-semibold text-slate-800">募集人数（必須）</p>
+              <p className="text-xs font-semibold text-[#e3d8c9]">募集人数（必須）</p>
               <select
                 value={form.recruitCount}
                 onChange={(e) => updateForm("recruitCount", Number(e.target.value))}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900"
+                className="w-full rounded border border-[#6b4a45] bg-[#151313] p-2 text-[#f4ede1]"
               >
                 <option value={1}>1人募集</option>
                 <option value={2}>2人募集</option>
               </select>
 
-              <p className="text-xs font-semibold text-slate-800">モード（必須）</p>
+              <p className="text-xs font-semibold text-[#e3d8c9]">モード（必須）</p>
               <select
                 value={form.mode}
                 onChange={(e) => updateForm("mode", e.target.value)}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900"
+                className="w-full rounded border border-[#6b4a45] bg-[#151313] p-2 text-[#f4ede1]"
               >
                 <option value="rank">ランク</option>
                 <option value="casual">カジュアル</option>
               </select>
 
-              <p className="text-xs font-semibold text-slate-800 sm:col-span-2">VC（必須）</p>
+              <p className="text-xs font-semibold text-[#e3d8c9] sm:col-span-2">VC（必須）</p>
               <select
                 value={form.vcType}
                 onChange={(e) => updateForm("vcType", e.target.value)}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900"
+                className="w-full rounded border border-[#6b4a45] bg-[#151313] p-2 text-[#f4ede1]"
               >
                 <option value="game">VC ON（ゲーム内）</option>
                 <option value="discord">Discord</option>
@@ -1310,8 +1613,8 @@ export default function Home() {
               </select>
             </div>
 
-            <div className="rounded-lg border border-slate-300 bg-slate-50 p-2">
-              <p className="mb-1 text-xs font-semibold text-slate-800">応募者の年齢層（任意 / 複数選択可）</p>
+            <div className="rounded-lg border border-[#4a3330] bg-[#222830] p-2">
+              <p className="mb-1 text-xs font-semibold text-[#e3d8c9]">応募者の年齢層（任意 / 複数選択可）</p>
               <div className="flex flex-wrap gap-2">
                 {AGE_GROUP_OPTIONS.map((option) => (
                   <button
@@ -1320,8 +1623,8 @@ export default function Home() {
                     onClick={() => toggleAllowedAgeGroup(option.value)}
                     className={`rounded px-2 py-1 text-xs ${
                       form.allowedAgeGroups.includes(option.value)
-                        ? "bg-indigo-700 text-white"
-                        : "border border-slate-300 bg-slate-100 text-slate-800"
+                        ? "bg-[#da292a] text-white"
+                        : "border border-[#4a3330] bg-[#1f1d1c] text-[#e3d8c9]"
                     }`}
                   >
                     {option.label}
@@ -1330,13 +1633,13 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="rounded-lg border border-slate-300 bg-slate-50 p-2">
-              <p className="mb-1 text-xs font-semibold text-slate-800">要求最低ランク（任意）</p>
+            <div className="rounded-lg border border-[#4a3330] bg-[#222830] p-2">
+              <p className="mb-1 text-xs font-semibold text-[#e3d8c9]">要求最低ランク（任意）</p>
               <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                 <select
                   value={form.minRankTier}
                   onChange={(e) => handleMinRankTierChange(e.target.value)}
-                  className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900"
+                  className="w-full rounded border border-[#6b4a45] bg-[#151313] p-2 text-[#f4ede1]"
                 >
                   {MIN_RANK_TIER_OPTIONS.map((option) => (
                     <option key={option.value || "none"} value={option.value}>
@@ -1350,7 +1653,7 @@ export default function Home() {
                   disabled={
                     form.minRankTier === "" || form.minRankTier === "master" || form.minRankTier === "predator"
                   }
-                  className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
+                  className="w-full rounded border border-[#6b4a45] bg-[#151313] p-2 text-[#f4ede1] disabled:cursor-not-allowed disabled:bg-[#2a2422] disabled:text-[#7e6f62]"
                 >
                   {MIN_RANK_DIVISION_OPTIONS.map((option) => (
                     <option key={option.value} value={option.value}>
@@ -1362,7 +1665,7 @@ export default function Home() {
             </div>
 
             <div>
-              <p className="mb-1 text-xs font-semibold text-slate-800">プレイスタイルタグ（必須 / 1つ以上、最大3つ）</p>
+              <p className="mb-1 text-xs font-semibold text-[#e3d8c9]">プレイスタイルタグ（必須 / 1つ以上、最大3つ）</p>
               <div className="flex flex-wrap gap-2">
                 {playStyleOptions.map((style) => (
                   <button
@@ -1371,8 +1674,8 @@ export default function Home() {
                     onClick={() => togglePlayStyle(style)}
                     className={`rounded px-2 py-1 text-xs ${
                       form.playStyles.includes(style)
-                        ? "bg-blue-700 text-white"
-                        : "border border-slate-300 bg-slate-100 text-slate-800"
+                        ? "bg-[#da292a] text-white"
+                        : "border border-[#4a3330] bg-[#1f1d1c] text-[#e3d8c9]"
                     }`}
                   >
                     {style}
@@ -1381,101 +1684,14 @@ export default function Home() {
               </div>
             </div>
 
-            <p className="text-xs font-semibold text-slate-800">その他（任意）</p>
+            <p className="text-xs font-semibold text-[#e3d8c9]">その他（任意）</p>
             <textarea
               placeholder="その他"
               value={form.otherText}
               onChange={(e) => updateForm("otherText", e.target.value)}
-              className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 placeholder:text-slate-500"
+              className="w-full rounded border border-[#6b4a45] bg-[#151313] p-2 text-[#f4ede1] placeholder:text-[#7e6f62]"
             />
           </section>
-        )}
-
-        {formTab === "profile" && (
-          <section className="space-y-3 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
-            <h2 className="text-sm font-semibold text-slate-900">投稿者情報</h2>
-            <div className="grid gap-2 sm:grid-cols-2">
-              <p className="text-xs font-semibold text-slate-800 sm:col-span-2">現在ランク（任意）</p>
-              <select
-                value={form.currentRankTier}
-                onChange={(e) => handleProfileRankTierChange("currentRankTier", e.target.value)}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900"
-              >
-                {PROFILE_RANK_TIER_OPTIONS.map((option) => (
-                  <option key={`current-${option.value || "none"}`} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={form.currentRankDivision ?? 4}
-                onChange={(e) => updateForm("currentRankDivision", Number(e.target.value))}
-                disabled={
-                  form.currentRankTier === "" || form.currentRankTier === "master" || form.currentRankTier === "predator"
-                }
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-              >
-                {MIN_RANK_DIVISION_OPTIONS.map((option) => (
-                  <option key={`current-division-${option.value}`} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-
-              <p className="mt-1 text-xs font-semibold text-slate-800 sm:col-span-2">最高到達ランク（任意）</p>
-              <select
-                value={form.maxRankTier}
-                onChange={(e) => handleProfileRankTierChange("maxRankTier", e.target.value)}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900"
-              >
-                {PROFILE_RANK_TIER_OPTIONS.map((option) => (
-                  <option key={`max-${option.value || "none"}`} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-              <select
-                value={form.maxRankDivision ?? 4}
-                onChange={(e) => updateForm("maxRankDivision", Number(e.target.value))}
-                disabled={form.maxRankTier === "" || form.maxRankTier === "master" || form.maxRankTier === "predator"}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 disabled:cursor-not-allowed disabled:bg-slate-200 disabled:text-slate-500"
-              >
-                {MIN_RANK_DIVISION_OPTIONS.map((option) => (
-                  <option key={`max-division-${option.value}`} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-
-              <p className="mt-1 text-xs font-semibold text-slate-800 sm:col-span-2">年齢層（任意）</p>
-              <select
-                value={form.ageGroup}
-                onChange={(e) => updateForm("ageGroup", e.target.value)}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 sm:col-span-2"
-              >
-                <option value="">未設定</option>
-                <option value="10s">10代</option>
-                <option value="20s">20代</option>
-                <option value="30s">30代</option>
-                <option value="40s">40代以上</option>
-              </select>
-
-              <p className="mt-1 text-xs font-semibold text-slate-800 sm:col-span-2">プラットフォーム（任意）</p>
-              <select
-                value={form.platform}
-                onChange={(e) => updateForm("platform", e.target.value)}
-                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 sm:col-span-2"
-              >
-                <option value="">未設定</option>
-                {PLATFORM_OPTIONS.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-          </section>
-        )}
 
       </div>
           </div>
@@ -1486,7 +1702,7 @@ export default function Home() {
         <button
           type="button"
           onClick={() => setIsMobileFilterOpen((prev) => !prev)}
-          className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium text-slate-800 shadow-sm hover:bg-slate-100"
+          className="w-full rounded-md border border-[#4a3330] bg-[#151313] px-3 py-2 text-sm font-medium text-[#e3d8c9] shadow-sm hover:bg-[#1f1d1c]"
         >
           {isMobileFilterOpen ? "フィルターを閉じる" : "フィルターを開く"}
         </button>
@@ -1496,13 +1712,13 @@ export default function Home() {
         <aside
           className={`${isMobileFilterOpen ? "block" : "hidden"} overflow-x-hidden lg:block lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)] lg:overflow-y-auto`}
         >
-          <div className="min-w-0 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
-            <div className="mb-2 inline-flex w-full rounded-lg border border-slate-300 bg-slate-100 p-1">
+          <div className="apex-panel min-w-0 rounded-xl border border-[#4a3330] bg-[#151313] p-3 shadow-sm">
+            <div className="apex-tab-group mb-2 inline-flex w-full rounded-lg border p-1">
               <button
                 type="button"
                 onClick={() => setFilterTab("recruit")}
-                className={`flex-1 rounded-md px-2 py-1 text-xs font-medium ${
-                  filterTab === "recruit" ? "bg-white text-slate-900 shadow-sm" : "text-slate-700"
+                className={`apex-tab flex-1 rounded-md px-2 py-1 text-xs font-medium ${
+                  filterTab === "recruit" ? "apex-tab-active text-[#f4ede1] shadow-sm" : "apex-tab-idle"
                 }`}
               >
                 募集内容
@@ -1510,8 +1726,8 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setFilterTab("poster")}
-                className={`flex-1 rounded-md px-2 py-1 text-xs font-medium ${
-                  filterTab === "poster" ? "bg-white text-slate-900 shadow-sm" : "text-slate-700"
+                className={`apex-tab flex-1 rounded-md px-2 py-1 text-xs font-medium ${
+                  filterTab === "poster" ? "apex-tab-active text-[#f4ede1] shadow-sm" : "apex-tab-idle"
                 }`}
               >
                 投稿者情報
@@ -1521,13 +1737,13 @@ export default function Home() {
             <div className="grid gap-2">
               {filterTab === "recruit" && (
                 <>
-                  <label className="text-xs font-semibold text-slate-700">タイトル</label>
+                  <label className="text-xs font-semibold text-[#bcae9d]">タイトル</label>
                   <input
                     type="text"
                     placeholder="タイトル"
                     value={postFilter.title}
                     onChange={(e) => setPostFilter((prev) => ({ ...prev, title: e.target.value }))}
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-500"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] placeholder:text-[#7e6f62]"
                   />
 
                   <select
@@ -1535,7 +1751,7 @@ export default function Home() {
                     onChange={(e) =>
                       setPostFilter((prev) => ({ ...prev, recruitCount: e.target.value as PostFilter["recruitCount"] }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">募集人数: すべて</option>
                     <option value="1">募集人数: 1人</option>
@@ -1545,7 +1761,7 @@ export default function Home() {
                   <select
                     value={postFilter.mode}
                     onChange={(e) => setPostFilter((prev) => ({ ...prev, mode: e.target.value as PostFilter["mode"] }))}
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">モード: すべて</option>
                     <option value="rank">モード: ランク</option>
@@ -1557,7 +1773,7 @@ export default function Home() {
                     onChange={(e) =>
                       setPostFilter((prev) => ({ ...prev, vcType: e.target.value as PostFilter["vcType"] }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">VC: すべて</option>
                     <option value="game">VC: ゲーム内</option>
@@ -1573,7 +1789,7 @@ export default function Home() {
                         allowedAgeGroup: e.target.value as PostFilter["allowedAgeGroup"],
                       }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">応募者年齢層: すべて</option>
                     <option value="10s">応募者年齢層: 10代</option>
@@ -1587,7 +1803,7 @@ export default function Home() {
                     onChange={(e) =>
                       setPostFilter((prev) => ({ ...prev, playStyle: e.target.value }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">プレイスタイル: すべて</option>
                     {playStyleOptions.map((style) => (
@@ -1602,7 +1818,7 @@ export default function Home() {
                     onChange={(e) =>
                       setPostFilter((prev) => ({ ...prev, minRankTier: e.target.value as PostFilter["minRankTier"] }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">要求最低ランク: すべて</option>
                     <option value="none">要求最低ランク: 指定なし</option>
@@ -1623,7 +1839,7 @@ export default function Home() {
                         minRankDivision: e.target.value as PostFilter["minRankDivision"],
                       }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">最低ランク division: すべて</option>
                     <option value="4">最低ランク division: IV</option>
@@ -1637,7 +1853,7 @@ export default function Home() {
                     placeholder="その他"
                     value={postFilter.otherText}
                     onChange={(e) => setPostFilter((prev) => ({ ...prev, otherText: e.target.value }))}
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900 placeholder:text-slate-500"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1] placeholder:text-[#7e6f62]"
                   />
                 </>
               )}
@@ -1652,7 +1868,7 @@ export default function Home() {
                         currentRankTier: e.target.value as PostFilter["currentRankTier"],
                       }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">現在ランク: すべて</option>
                     <option value="none">現在ランク: 未設定</option>
@@ -1673,7 +1889,7 @@ export default function Home() {
                         currentRankDivision: e.target.value as PostFilter["currentRankDivision"],
                       }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">現在ランク division: すべて</option>
                     <option value="4">現在ランク division: IV</option>
@@ -1687,7 +1903,7 @@ export default function Home() {
                     onChange={(e) =>
                       setPostFilter((prev) => ({ ...prev, maxRankTier: e.target.value as PostFilter["maxRankTier"] }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">最高到達ランク: すべて</option>
                     <option value="none">最高到達ランク: 未設定</option>
@@ -1708,7 +1924,7 @@ export default function Home() {
                         maxRankDivision: e.target.value as PostFilter["maxRankDivision"],
                       }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">最高ランク division: すべて</option>
                     <option value="4">最高ランク division: IV</option>
@@ -1725,7 +1941,7 @@ export default function Home() {
                         posterAgeGroup: e.target.value as PostFilter["posterAgeGroup"],
                       }))
                     }
-                    className="rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">投稿者年齢層: すべて</option>
                     <option value="10s">投稿者年齢層: 10代</option>
@@ -1742,12 +1958,11 @@ export default function Home() {
                         posterPlatform: e.target.value as PostFilter["posterPlatform"],
                       }))
                     }
-                    className="w-full min-w-0 rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                    className="w-full min-w-0 rounded border border-[#6b4a45] bg-[#151313] p-2 text-sm text-[#f4ede1]"
                   >
                     <option value="all">投稿者プラットフォーム: すべて</option>
                     <option value="origin">投稿者プラットフォーム: PC</option>
-                    <option value="xbl">投稿者プラットフォーム: Xbox</option>
-                    <option value="psn">投稿者プラットフォーム: PS</option>
+                    <option value="psn">投稿者プラットフォーム: PlayStation</option>
                   </select>
                 </>
               )}
@@ -1755,14 +1970,14 @@ export default function Home() {
               <button
                 type="button"
                 onClick={() => setPostFilter(DEFAULT_FILTER)}
-                className="rounded border border-slate-300 bg-slate-100 px-3 py-2 text-sm text-slate-800 hover:bg-slate-200"
+                className="rounded border border-[#4a3330] bg-[#1f1d1c] px-3 py-2 text-sm text-[#e3d8c9] hover:bg-[#2a2422]"
               >
                 フィルター解除
               </button>
             </div>
 
             <div className="mt-2">
-              <span className="text-xs font-medium text-slate-700">表示件数: {filteredPosts.length}件</span>
+              <span className="text-xs font-medium text-[#bcae9d]">表示件数: {filteredPosts.length}件</span>
             </div>
           </div>
         </aside>
@@ -1776,7 +1991,7 @@ export default function Home() {
             return (
           <article
             key={post.id}
-            className="rounded-2xl border border-slate-300 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md sm:p-5"
+            className="apex-panel apex-card rounded-2xl border border-[#4a3330] bg-[#151313] p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md sm:p-5"
           >
             <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
               <div className="flex items-start gap-3">
@@ -1786,29 +2001,29 @@ export default function Home() {
                     alt="poster avatar"
                     width={40}
                     height={40}
-                    className="h-10 w-10 rounded-full border border-slate-300 object-cover"
+                    className="h-10 w-10 rounded-full border border-[#4a3330] object-cover"
                   />
                 ) : (
-                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-300 text-sm font-semibold text-slate-800">
+                  <div className="flex h-10 w-10 items-center justify-center rounded-full bg-[#5a423d] text-sm font-semibold text-[#e3d8c9]">
                     {posterName.charAt(0).toUpperCase()}
                   </div>
                 )}
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-950">{post.title}</h2>
-                  <p className="text-xs text-slate-600">投稿者: {posterName}</p>
+                  <h2 className="text-lg font-semibold text-[#f4ede1]">{post.title}</h2>
+                  <p className="text-xs text-[#9c8d7d]">投稿者: {posterName}</p>
                 </div>
               </div>
               <div className="flex flex-row items-center gap-2 text-xs sm:flex-col sm:items-end sm:gap-1">
-                <span className="rounded-full bg-red-100 px-2 py-1 font-semibold text-red-700">残り {remaining}</span>
-                <span className="rounded-full bg-slate-200 px-2 py-1 font-medium text-slate-800">
+                <span className="apex-badge-danger rounded-full px-2 py-1 font-semibold">残り {remaining}</span>
+                <span className="apex-badge-muted rounded-full px-2 py-1 font-medium">
                   応募 {post.applications?.[0]?.count || 0}
                 </span>
               </div>
             </div>
 
             <div className="mt-4 space-y-3">
-              <section className="rounded-lg border border-blue-200 bg-blue-50/40 p-3 text-sm text-slate-800">
-                <h3 className="mb-2 font-semibold text-slate-900">募集内容</h3>
+              <section className="rounded-lg border border-[#6a3f36] bg-[#221816]/70 p-3 text-sm text-[#e3d8c9]">
+                <h3 className="mb-2 font-semibold text-[#f4ede1]">募集内容</h3>
                 <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
                   <p>募集人数: {post.recruit_count}人</p>
                   <p>モード: {toModeLabel(post.mode)}</p>
@@ -1829,8 +2044,8 @@ export default function Home() {
                 </div>
               </section>
 
-              <section className="rounded-lg border border-emerald-200 bg-emerald-50/40 p-3 text-sm text-slate-800">
-                <h3 className="mb-2 font-semibold text-slate-900">投稿者情報</h3>
+              <section className="rounded-lg border border-[#4a3330] bg-[#1d1917]/70 p-3 text-sm text-[#e3d8c9]">
+                <h3 className="mb-2 font-semibold text-[#f4ede1]">投稿者情報</h3>
                 <div className="grid grid-cols-1 gap-2">
                   <p>現在ランク: {formatRank(post.current_rank_tier, post.current_rank_division)}</p>
                   <p>最高到達ランク: {formatRank(post.max_rank_tier, post.max_rank_division)}</p>
@@ -1843,7 +2058,7 @@ export default function Home() {
             {post.play_styles.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-2">
                 {post.play_styles.map((style) => (
-                  <span key={style} className="rounded-full bg-blue-100 px-2 py-1 text-xs font-medium text-blue-800">
+                  <span key={style} className="apex-chip px-2 py-1 text-xs font-medium">
                     {style}
                   </span>
                 ))}
@@ -1851,7 +2066,7 @@ export default function Home() {
             )}
 
             {currentUserId && post.winner_user_id === currentUserId && (
-              <p className="mt-3 text-sm font-semibold text-emerald-700">あなたが選ばれました</p>
+              <p className="mt-3 text-sm font-semibold text-[#f2c879]">あなたが選ばれました</p>
             )}
 
             {currentUserId && post.user_id === currentUserId && (
@@ -1859,25 +2074,25 @@ export default function Home() {
                 <div className="flex flex-wrap gap-2">
                   <button
                     onClick={() => fetchApplicants(post.id)}
-                    className="rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-900"
+                    className="rounded-md bg-[#3a2b28] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#151313]"
                   >
                     応募一覧を見る
                   </button>
                   <button
                     onClick={() => handleDeletePost(post.id)}
-                    className="rounded-md bg-rose-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-800"
+                    className="rounded-md bg-[#8f2324] px-3 py-1.5 text-sm font-medium text-white hover:bg-[#b53031]"
                   >
                     投稿を削除
                   </button>
                 </div>
 
                 {activePostId === post.id && (
-                  <div className="mt-2 space-y-2 rounded-lg border border-slate-300 bg-slate-100 p-2">
+                  <div className="mt-2 space-y-2 rounded-lg border border-[#4a3330] bg-[#1f1d1c] p-2">
                     {applicants.length === 0 ? (
-                      <p className="text-sm text-slate-700">まだ応募はありません。</p>
+                      <p className="text-sm text-[#bcae9d]">まだ応募はありません。</p>
                     ) : (
                       <>
-                        <div className="flex items-center justify-between text-xs text-slate-700">
+                        <div className="flex items-center justify-between text-xs text-[#bcae9d]">
                           <span>
                             応募者 {activeApplicantIndex + 1} / {applicants.length}
                           </span>
@@ -1886,7 +2101,7 @@ export default function Home() {
                               type="button"
                               onClick={() => setActiveApplicantIndex((prev) => Math.max(0, prev - 1))}
                               disabled={activeApplicantIndex === 0}
-                              className="rounded border border-slate-300 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="rounded border border-[#4a3330] bg-[#151313] px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               前へ
                             </button>
@@ -1896,7 +2111,7 @@ export default function Home() {
                                 setActiveApplicantIndex((prev) => Math.min(applicants.length - 1, prev + 1))
                               }
                               disabled={activeApplicantIndex >= applicants.length - 1}
-                              className="rounded border border-slate-300 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                              className="rounded border border-[#4a3330] bg-[#151313] px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
                             >
                               次へ
                             </button>
@@ -1904,13 +2119,13 @@ export default function Home() {
                         </div>
 
                         {activeApplicant && (
-                          <div className="rounded-md border border-slate-300 bg-white p-3 text-sm text-slate-900">
-                            <p className="font-semibold text-slate-950">
+                          <div className="rounded-md border border-[#4a3330] bg-[#151313] p-3 text-sm text-[#f4ede1]">
+                            <p className="font-semibold text-[#f4ede1]">
                               {activeApplicantProfile?.display_name?.trim() ||
                                 activeApplicantProfile?.tracker_handle?.trim() ||
                                 `User ${activeApplicant.applicant_user_id.slice(0, 6)}`}
                             </p>
-                            <p className="text-xs text-slate-600">ID: {activeApplicant.applicant_user_id}</p>
+                            <p className="text-xs text-[#9c8d7d]">ID: {activeApplicant.applicant_user_id}</p>
                             <div className="mt-2 grid gap-1 sm:grid-cols-2">
                               <p>
                                 現在ランク:{" "}
@@ -1929,14 +2144,14 @@ export default function Home() {
                               <p>年齢層: {toAgeLabel(activeApplicantProfile?.age_group ?? "") || "未設定"}</p>
                             </div>
 
-                            <div className="mt-3 space-y-2 rounded-md border border-emerald-200 bg-emerald-50/50 p-2">
-                              <p className="text-xs font-semibold text-slate-900">選択時に送付する情報</p>
+                            <div className="mt-3 space-y-2 rounded-md border border-[#4a3330] bg-[#1d1917]/80 p-2">
+                              <p className="text-xs font-semibold text-[#f4ede1]">選択時に送付する情報</p>
                               <input
                                 type="text"
                                 placeholder="EAアカウント名"
                                 value={finalizePayloadByPost[post.id]?.eaAccountName ?? ""}
                                 onChange={(e) => updateFinalizePayload(post.id, "eaAccountName", e.target.value)}
-                                className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
+                                className="w-full rounded border border-[#4a3330] bg-[#151313] px-2 py-1.5 text-xs text-[#f4ede1]"
                               />
                               {toVcKey(post.vc_type) === "discord" && (
                                 <input
@@ -1944,7 +2159,7 @@ export default function Home() {
                                   placeholder="Discordサーバ招待リンク"
                                   value={finalizePayloadByPost[post.id]?.discordInviteLink ?? ""}
                                   onChange={(e) => updateFinalizePayload(post.id, "discordInviteLink", e.target.value)}
-                                  className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
+                                  className="w-full rounded border border-[#4a3330] bg-[#151313] px-2 py-1.5 text-xs text-[#f4ede1]"
                                 />
                               )}
                               <textarea
@@ -1952,14 +2167,14 @@ export default function Home() {
                                 value={finalizePayloadByPost[post.id]?.message ?? ""}
                                 onChange={(e) => updateFinalizePayload(post.id, "message", e.target.value)}
                                 rows={3}
-                                className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
+                                className="w-full rounded border border-[#4a3330] bg-[#151313] px-2 py-1.5 text-xs text-[#f4ede1]"
                               />
                             </div>
 
                             <div className="mt-3">
                               <button
                                 onClick={() => handleFinalizeSelection(post.id, activeApplicant.applicant_user_id)}
-                                className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800"
+                                className="apex-cta rounded-md bg-[#da292a] px-3 py-1.5 text-sm font-medium tracking-wide text-white hover:bg-[#f15c43]"
                               >
                                 この人に決定して通知を送る
                               </button>
@@ -1975,14 +2190,14 @@ export default function Home() {
 
             <div className="mt-4 flex justify-end">
               {appliedPostIds.includes(post.id) ? (
-                <button disabled className="rounded-md bg-slate-200 px-4 py-2 text-sm text-slate-600">
+                <button disabled className="rounded-md bg-[#2a2422] px-4 py-2 text-sm text-[#9c8d7d]">
                   応募済み
                 </button>
               ) : (
                 <button
                   onClick={() => handleApply(post)}
                   disabled={!currentUserId || post.user_id === currentUserId}
-                  className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
+                  className="apex-cta rounded-md bg-[#da292a] px-4 py-2 text-sm font-medium tracking-wide text-white hover:bg-[#f15c43] disabled:cursor-not-allowed disabled:bg-[#6b4a45]"
                 >
                   {currentUserId ? (post.user_id === currentUserId ? "自分の投稿" : "応募する") : "ログインして応募"}
                 </button>
@@ -1992,7 +2207,7 @@ export default function Home() {
             );
           })}
           {filteredPosts.length === 0 && (
-            <p className="rounded-xl border border-slate-300 bg-white p-6 text-center text-sm text-slate-700 shadow-sm md:col-span-2">
+            <p className="rounded-xl border border-[#4a3330] bg-[#151313] p-6 text-center text-sm text-[#bcae9d] shadow-sm md:col-span-2">
               {visiblePosts.length > 0 ? "条件に一致する募集がありません" : "表示できる募集がありません"}
             </p>
           )}
