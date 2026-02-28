@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from "react";
 import { hasSupabaseEnv, supabase, supabaseConfigMessage } from "../lib/supabase";
 import type { User } from "@supabase/supabase-js";
 import Image from "next/image";
+import Link from "next/link";
 
 type Post = {
   id: number;
@@ -21,6 +22,7 @@ type Post = {
   max_rank_tier?: string;
   max_rank_division?: number;
   age_group: string;
+  platform?: string | null;
   created_at: string;
   user_id: string;
   is_closed: boolean;
@@ -32,6 +34,47 @@ type Application = {
   id: number;
   applicant_user_id: string;
   post_id: number;
+};
+
+type ApplicationResult = {
+  id: number;
+  post_id: number;
+  post_title: string;
+  vc_type: string | null;
+  recruiter_user_id: string;
+  applicant_user_id: string;
+  status: "selected" | "rejected";
+  ea_account_name: string | null;
+  discord_invite_link: string | null;
+  message: string | null;
+  created_at: string;
+};
+
+type FinalizePayload = {
+  eaAccountName: string;
+  discordInviteLink: string;
+  message: string;
+};
+
+type UserProfile = {
+  user_id: string;
+  tracker_platform: string | null;
+  current_rank_tier: string | null;
+  current_rank_division: number | null;
+  max_rank_tier: string | null;
+  max_rank_division: number | null;
+  age_group: string | null;
+};
+
+type ApplicantProfile = {
+  user_id: string;
+  display_name: string | null;
+  tracker_handle: string | null;
+  current_rank_tier: string | null;
+  current_rank_division: number | null;
+  max_rank_tier: string | null;
+  max_rank_division: number | null;
+  age_group: string | null;
 };
 
 type FormState = {
@@ -49,6 +92,7 @@ type FormState = {
   maxRankTier: string;
   maxRankDivision: number | null;
   ageGroup: string;
+  platform: string;
 };
 
 type PostFilter = {
@@ -75,6 +119,7 @@ type PostFilter = {
   maxRankTier: "all" | "none" | "bronze" | "silver" | "gold" | "platinum" | "diamond" | "master" | "predator";
   maxRankDivision: "all" | "1" | "2" | "3" | "4";
   posterAgeGroup: "all" | "10s" | "20s" | "30s" | "40s";
+  posterPlatform: "all" | "origin" | "xbl" | "psn";
 };
 
 const POST_EXPIRY_MS = 2 * 60 * 60 * 1000;
@@ -85,6 +130,11 @@ const AGE_GROUP_OPTIONS = [
   { value: "20s", label: "20代" },
   { value: "30s", label: "30代" },
   { value: "40s", label: "40代以上" },
+];
+const PLATFORM_OPTIONS = [
+  { value: "origin", label: "PC (Origin/EA app)" },
+  { value: "xbl", label: "Xbox" },
+  { value: "psn", label: "PlayStation" },
 ];
 const MIN_RANK_TIER_OPTIONS = [
   { value: "", label: "指定なし" },
@@ -138,6 +188,14 @@ const AGE_LABELS: Record<string, string> = {
   "20代": "20代",
   "30代": "30代",
   "40代以上": "40代以上",
+};
+const PLATFORM_LABELS: Record<string, string> = {
+  origin: "PC (Origin/EA app)",
+  xbl: "Xbox",
+  psn: "PlayStation",
+  pc: "PC (Origin/EA app)",
+  xbox: "Xbox",
+  playstation: "PlayStation",
 };
 const TIER_LABELS: Record<string, string> = {
   bronze: "ブロンズ",
@@ -194,13 +252,27 @@ const AGE_KEYS_BY_LABEL: Record<string, "10s" | "20s" | "30s" | "40s"> = {
   "30代": "30s",
   "40代以上": "40s",
 };
+const PLATFORM_KEYS_BY_LABEL: Record<string, "origin" | "xbl" | "psn"> = {
+  origin: "origin",
+  xbl: "xbl",
+  psn: "psn",
+  pc: "origin",
+  "pc (origin/ea app)": "origin",
+  xbox: "xbl",
+  playstation: "psn",
+};
 const toModeLabel = (value: string) => MODE_LABELS[value] ?? value;
 const toVcLabel = (value: string) => VC_LABELS[value] ?? value;
 const toAgeLabel = (value: string) => AGE_LABELS[value] ?? value;
+const toPlatformLabel = (value: string) => PLATFORM_LABELS[value.toLowerCase()] ?? value;
 const toTierLabel = (value: string) => TIER_LABELS[value] ?? value;
 const toModeKey = (value: string) => MODE_KEYS_BY_LABEL[value] ?? value;
 const toVcKey = (value: string) => VC_KEYS_BY_LABEL[value] ?? value;
 const toAgeKey = (value: string) => AGE_KEYS_BY_LABEL[value] ?? value;
+const toPlatformKey = (value?: string | null) => {
+  if (!value) return null;
+  return PLATFORM_KEYS_BY_LABEL[value.toLowerCase()] ?? null;
+};
 const toTierKey = (value?: string | null) => {
   if (!value) return null;
   return TIER_KEYS_BY_LABEL[value] ?? null;
@@ -221,6 +293,7 @@ const POST_SELECT_COLUMNS = `
   max_rank_tier,
   max_rank_division,
   age_group,
+  platform,
   created_at,
   user_id,
   is_closed,
@@ -242,6 +315,7 @@ const DEFAULT_FORM: FormState = {
   maxRankTier: "",
   maxRankDivision: null,
   ageGroup: "",
+  platform: "",
 };
 const DEFAULT_FILTER: PostFilter = {
   title: "",
@@ -258,6 +332,12 @@ const DEFAULT_FILTER: PostFilter = {
   maxRankTier: "all",
   maxRankDivision: "all",
   posterAgeGroup: "all",
+  posterPlatform: "all",
+};
+const DEFAULT_FINALIZE_PAYLOAD: FinalizePayload = {
+  eaAccountName: "",
+  discordInviteLink: "",
+  message: "",
 };
 
 export default function Home() {
@@ -273,7 +353,12 @@ export default function Home() {
   const [playStyleOptions, setPlayStyleOptions] = useState<string[]>(DEFAULT_PLAY_STYLE_OPTIONS);
   const [appliedPostIds, setAppliedPostIds] = useState<number[]>([]);
   const [applicants, setApplicants] = useState<Application[]>([]);
+  const [applicantProfiles, setApplicantProfiles] = useState<Record<string, ApplicantProfile>>({});
+  const [activeApplicantIndex, setActiveApplicantIndex] = useState(0);
+  const [finalizePayloadByPost, setFinalizePayloadByPost] = useState<Record<number, FinalizePayload>>({});
+  const [applicationResults, setApplicationResults] = useState<ApplicationResult[]>([]);
   const [activePostId, setActivePostId] = useState<number | null>(null);
+  const [userProfile, setUserProfile] = useState<UserProfile | null>(null);
   const currentUserId = currentUser?.id ?? null;
 
   const updateForm = <K extends keyof FormState>(key: K, value: FormState[K]) => {
@@ -402,13 +487,57 @@ export default function Home() {
     setAppliedPostIds((data ?? []).map((item) => item.post_id));
   }, [currentUserId]);
 
+  const fetchUserProfile = useCallback(async () => {
+    if (!hasSupabaseEnv || !currentUserId) {
+      setUserProfile(null);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("profiles")
+      .select("user_id,tracker_platform,current_rank_tier,current_rank_division,max_rank_tier,max_rank_division,age_group")
+      .eq("user_id", currentUserId)
+      .maybeSingle();
+
+    if (error) {
+      console.error(error);
+      setUserProfile(null);
+      return;
+    }
+
+    setUserProfile((data as UserProfile | null) ?? null);
+  }, [currentUserId]);
+
+  const fetchMyApplicationResults = useCallback(async () => {
+    if (!hasSupabaseEnv || !currentUserId) {
+      setApplicationResults([]);
+      return;
+    }
+
+    const { data, error } = await supabase
+      .from("application_results")
+      .select(
+        "id,post_id,post_title,vc_type,recruiter_user_id,applicant_user_id,status,ea_account_name,discord_invite_link,message,created_at"
+      )
+      .eq("applicant_user_id", currentUserId)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error(error);
+      setApplicationResults([]);
+      return;
+    }
+
+    setApplicationResults((data as ApplicationResult[]) ?? []);
+  }, [currentUserId]);
+
   useEffect(() => {
     const loadInitialData = async () => {
-      await Promise.all([fetchPosts(), fetchMyApplications(), fetchPlayStyleTags()]);
+      await Promise.all([fetchPosts(), fetchMyApplications(), fetchPlayStyleTags(), fetchUserProfile(), fetchMyApplicationResults()]);
     };
 
     void loadInitialData();
-  }, [fetchMyApplications, fetchPlayStyleTags, fetchPosts]);
+  }, [fetchMyApplicationResults, fetchMyApplications, fetchPlayStyleTags, fetchPosts, fetchUserProfile]);
 
   const togglePlayStyle = (style: string) => {
     const exists = form.playStyles.includes(style);
@@ -429,7 +558,15 @@ export default function Home() {
   };
 
   const resetForm = () => {
-    setForm({ ...DEFAULT_FORM });
+    setForm({
+      ...DEFAULT_FORM,
+      currentRankTier: toTierKey(userProfile?.current_rank_tier) ?? "",
+      currentRankDivision: userProfile?.current_rank_division ?? null,
+      maxRankTier: toTierKey(userProfile?.max_rank_tier) ?? "",
+      maxRankDivision: userProfile?.max_rank_division ?? null,
+      ageGroup: toAgeKey(userProfile?.age_group ?? "") || "",
+      platform: toPlatformKey(userProfile?.tracker_platform) ?? "",
+    });
   };
 
   const handleSignInWithDiscord = async () => {
@@ -464,6 +601,10 @@ export default function Home() {
     setAppliedPostIds([]);
     setActivePostId(null);
     setApplicants([]);
+    setApplicantProfiles({});
+    setActiveApplicantIndex(0);
+    setFinalizePayloadByPost({});
+    setApplicationResults([]);
   };
 
   const handleMinRankTierChange = (tier: string) => {
@@ -542,6 +683,7 @@ export default function Home() {
         current_rank_division: form.currentRankDivision || null,
         max_rank_tier: form.maxRankTier ? toTierLabel(form.maxRankTier) : null,
         max_rank_division: form.maxRankDivision || null,
+        platform: form.platform || null,
         user_id: currentUserId,
       },
     ]);
@@ -578,41 +720,141 @@ export default function Home() {
     if (activePostId === postId) {
       setActivePostId(null);
       setApplicants([]);
+      setApplicantProfiles({});
+      setActiveApplicantIndex(0);
+      setFinalizePayloadByPost((prev) => {
+        const next = { ...prev };
+        delete next[postId];
+        return next;
+      });
     }
 
     alert("投稿を削除しました。再投稿できます。");
     await fetchPosts();
   };
 
-  const handleSelect = async (postId: number, applicantUserId: string) => {
+  const updateFinalizePayload = <K extends keyof FinalizePayload>(postId: number, key: K, value: FinalizePayload[K]) => {
+    setFinalizePayloadByPost((prev) => ({
+      ...prev,
+      [postId]: {
+        ...(prev[postId] ?? DEFAULT_FINALIZE_PAYLOAD),
+        [key]: value,
+      },
+    }));
+  };
+
+  const handleFinalizeSelection = async (postId: number, selectedApplicantUserId: string) => {
     if (!hasSupabaseEnv) {
       alert(supabaseConfigMessage);
       return;
     }
-    const confirmed = confirm("この応募者を選択しますか？");
-    if (!confirmed) return;
-
-    const { error } = await supabase
-      .from("posts")
-      .update({
-        is_closed: true,
-        winner_user_id: applicantUserId,
-      })
-      .eq("id", postId);
-
-    if (error) {
-      console.error(error);
+    if (!currentUserId) {
+      alert("募集を確定するにはDiscordログインが必要です");
+      return;
+    }
+    if (applicants.length === 0) {
+      alert("応募者がいないため確定できません");
+      return;
+    }
+    const finalizePayload = finalizePayloadByPost[postId] ?? DEFAULT_FINALIZE_PAYLOAD;
+    if (!finalizePayload.eaAccountName.trim()) {
+      alert("EAアカウント名を入力してください");
+      return;
+    }
+    if (!finalizePayload.message.trim()) {
+      alert("一言メッセージを入力してください");
       return;
     }
 
-    alert("応募者を確定しました");
-    await fetchPosts();
+    const confirmed = confirm("この応募者を選択して結果を送付しますか？");
+    if (!confirmed) return;
+
+    const selectedApplicantIds = new Set(applicants.map((item) => item.applicant_user_id));
+    if (!selectedApplicantIds.has(selectedApplicantUserId)) {
+      alert("選択された応募者情報が見つかりません。再読み込みして再試行してください。");
+      return;
+    }
+
+    const selectedPost = posts.find((item) => item.id === postId);
+    const postTitle = selectedPost?.title ?? "募集";
+    const postVcType = selectedPost?.vc_type ?? null;
+    const isDiscordVc = postVcType ? toVcKey(postVcType) === "discord" : false;
+    if (isDiscordVc && !finalizePayload.discordInviteLink.trim()) {
+      alert("VCがDiscordの募集は、Discordサーバ招待リンクを入力してください");
+      return;
+    }
+    const resultRows = applicants.map((applicant) => {
+      const isSelected = applicant.applicant_user_id === selectedApplicantUserId;
+      return {
+        post_id: postId,
+        post_title: postTitle,
+        vc_type: postVcType,
+        recruiter_user_id: currentUserId,
+        applicant_user_id: applicant.applicant_user_id,
+        status: isSelected ? "selected" : "rejected",
+        ea_account_name: isSelected ? finalizePayload.eaAccountName.trim() : null,
+        discord_invite_link: isSelected && isDiscordVc ? finalizePayload.discordInviteLink.trim() : null,
+        message: isSelected ? finalizePayload.message.trim() : "今回は選考外となりました。",
+      };
+    });
+
+    const { error: resultError } = await supabase
+      .from("application_results")
+      .upsert(resultRows, { onConflict: "post_id,applicant_user_id" });
+
+    if (resultError) {
+      console.error(resultError);
+      alert("結果通知の送付に失敗しました");
+      return;
+    }
+
+    const { error: postError } = await supabase
+      .from("posts")
+      .update({
+        is_closed: true,
+        winner_user_id: selectedApplicantUserId,
+      })
+      .eq("id", postId)
+      .eq("user_id", currentUserId);
+
+    if (postError) {
+      console.error(postError);
+      alert("投稿の確定に失敗しました");
+      return;
+    }
+
+    setActivePostId(null);
+    setApplicants([]);
+    setApplicantProfiles({});
+    setActiveApplicantIndex(0);
+    setFinalizePayloadByPost((prev) => {
+      const next = { ...prev };
+      delete next[postId];
+      return next;
+    });
+    alert("応募者を確定し、応募者全員へ結果を送付しました");
+    await Promise.all([fetchPosts(), fetchMyApplicationResults()]);
   };
 
   const fetchApplicants = async (postId: number) => {
     if (!hasSupabaseEnv) {
       setApplicants([]);
       setActivePostId(null);
+      setApplicantProfiles({});
+      setActiveApplicantIndex(0);
+      setFinalizePayloadByPost({});
+      return;
+    }
+    if (activePostId === postId) {
+      setApplicants([]);
+      setActivePostId(null);
+      setApplicantProfiles({});
+      setActiveApplicantIndex(0);
+      setFinalizePayloadByPost((prev) => {
+        const next = { ...prev };
+        delete next[postId];
+        return next;
+      });
       return;
     }
     const { data, error } = await supabase.from("applications").select("*").eq("post_id", postId);
@@ -622,11 +864,48 @@ export default function Home() {
       return;
     }
 
-    setApplicants((data as Application[]) ?? []);
+    const nextApplicants = (data as Application[]) ?? [];
+    setApplicants(nextApplicants);
+    setActiveApplicantIndex(0);
+    setFinalizePayloadByPost((prev) => ({
+      ...prev,
+      [postId]: prev[postId] ?? DEFAULT_FINALIZE_PAYLOAD,
+    }));
+    const applicantIds = Array.from(new Set(nextApplicants.map((item) => item.applicant_user_id).filter(Boolean)));
+
+    if (applicantIds.length === 0) {
+      setApplicantProfiles({});
+      setActivePostId(postId);
+      return;
+    }
+
+    const { data: profilesData, error: profilesError } = await supabase
+      .from("profiles")
+      .select(
+        "user_id,display_name,tracker_handle,current_rank_tier,current_rank_division,max_rank_tier,max_rank_division,age_group"
+      )
+      .in("user_id", applicantIds);
+
+    if (profilesError) {
+      console.error(profilesError);
+      setApplicantProfiles({});
+      setActivePostId(postId);
+      return;
+    }
+
+    const nextProfiles = ((profilesData as ApplicantProfile[]) ?? []).reduce<Record<string, ApplicantProfile>>(
+      (acc, profile) => {
+        acc[profile.user_id] = profile;
+        return acc;
+      },
+      {}
+    );
+
+    setApplicantProfiles(nextProfiles);
     setActivePostId(postId);
   };
 
-  const handleApply = async (postId: number) => {
+  const handleApply = async (post: Post) => {
     if (!hasSupabaseEnv) {
       alert(supabaseConfigMessage);
       return;
@@ -635,12 +914,20 @@ export default function Home() {
       alert("応募するにはDiscordログインが必要です");
       return;
     }
+    if (post.user_id === currentUserId) {
+      alert("自分の投稿には応募できません");
+      return;
+    }
+    if (appliedPostIds.includes(post.id)) {
+      alert("この投稿には応募済みです");
+      return;
+    }
     const confirmed = confirm("この投稿に応募しますか？");
     if (!confirmed) return;
 
     const { error } = await supabase.from("applications").insert([
       {
-        post_id: postId,
+        post_id: post.id,
         applicant_user_id: currentUserId,
       },
     ]);
@@ -652,7 +939,7 @@ export default function Home() {
     }
 
     alert("応募しました");
-    setAppliedPostIds((prev) => [...prev, postId]);
+    await Promise.all([fetchMyApplications(), fetchPosts()]);
   };
 
   const getRemainingTime = useCallback(
@@ -766,6 +1053,8 @@ export default function Home() {
       postFilter.maxRankDivision
     );
     const posterAgeMatched = postFilter.posterAgeGroup === "all" || toAgeKey(post.age_group) === postFilter.posterAgeGroup;
+    const posterPlatformMatched =
+      postFilter.posterPlatform === "all" || toPlatformKey(post.platform) === postFilter.posterPlatform;
 
     return (
       titleMatched &&
@@ -778,7 +1067,8 @@ export default function Home() {
       otherTextMatched &&
       currentRankMatched &&
       maxRankMatched &&
-      posterAgeMatched
+      posterAgeMatched &&
+      posterPlatformMatched
     );
   });
   const sortedFilteredPosts = [...filteredPosts].sort((a, b) => {
@@ -786,6 +1076,8 @@ export default function Home() {
     const bMine = b.post.user_id === currentUserId ? 1 : 0;
     return bMine - aMine;
   });
+  const activeApplicant = applicants[activeApplicantIndex] ?? null;
+  const activeApplicantProfile = activeApplicant ? applicantProfiles[activeApplicant.applicant_user_id] : null;
 
   const getPosterDisplayName = (userId: string) => {
     if (userId === currentUserId) {
@@ -822,6 +1114,12 @@ export default function Home() {
               <span className="max-w-full truncate text-sm text-slate-700 sm:max-w-[420px]">
                 ログイン中: {currentUser.user_metadata?.full_name ?? currentUser.email ?? currentUser.id}
               </span>
+              <Link
+                href="/profile"
+                className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-center text-sm font-medium text-slate-800 hover:bg-slate-100 sm:w-auto"
+              >
+                プロフィール
+              </Link>
               <button
                 type="button"
                 onClick={() => setIsCreateModalOpen(true)}
@@ -884,6 +1182,36 @@ export default function Home() {
         <p className="mb-4 text-xs font-medium text-amber-700">
           同時に出せる投稿は1件のみです。修正する場合は「削除 → 再投稿」で対応してください。
         </p>
+      )}
+
+      {currentUserId && applicationResults.length > 0 && (
+        <section className="mb-4 rounded-xl border border-indigo-200 bg-indigo-50/60 p-3 sm:p-4">
+          <h2 className="mb-2 text-sm font-semibold text-slate-900">応募結果のお知らせ</h2>
+          <div className="space-y-2">
+            {applicationResults.slice(0, 5).map((result) => (
+              <article key={result.id} className="rounded-md border border-indigo-200 bg-white p-3 text-sm text-slate-800">
+                <p className="font-semibold text-slate-900">{result.post_title}</p>
+                <p className={`mt-1 text-xs font-semibold ${result.status === "selected" ? "text-emerald-700" : "text-rose-700"}`}>
+                  {result.status === "selected" ? "募集者に選ばれました" : "今回は選ばれませんでした"}
+                </p>
+                {result.message && <p className="mt-2 whitespace-pre-wrap text-xs text-slate-700">{result.message}</p>}
+                {result.status === "selected" && (
+                  <div className="mt-2 grid gap-1 text-xs text-slate-700 sm:grid-cols-2">
+                    <p>EAアカウント名: {result.ea_account_name || "未設定"}</p>
+                    {toVcKey(result.vc_type ?? "") === "discord" ? (
+                      <p className="break-all">Discord招待: {result.discord_invite_link || "未設定"}</p>
+                    ) : (
+                      <p>Discord招待: 対象外（VCがDiscordではありません）</p>
+                    )}
+                  </div>
+                )}
+                <p className="mt-2 text-[11px] text-slate-500">
+                  通知日時: {new Date(result.created_at).toLocaleString("ja-JP")}
+                </p>
+              </article>
+            ))}
+          </div>
+        </section>
       )}
 
       {isCreateModalOpen && (
@@ -1131,6 +1459,20 @@ export default function Home() {
                 <option value="30s">30代</option>
                 <option value="40s">40代以上</option>
               </select>
+
+              <p className="mt-1 text-xs font-semibold text-slate-800 sm:col-span-2">プラットフォーム（任意）</p>
+              <select
+                value={form.platform}
+                onChange={(e) => updateForm("platform", e.target.value)}
+                className="w-full rounded border border-slate-400 bg-white p-2 text-slate-900 sm:col-span-2"
+              >
+                <option value="">未設定</option>
+                {PLATFORM_OPTIONS.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
             </div>
           </section>
         )}
@@ -1151,8 +1493,10 @@ export default function Home() {
       </div>
 
       <div className="mt-4 grid gap-4 lg:grid-cols-[300px_minmax(0,1fr)]">
-        <aside className={`${isMobileFilterOpen ? "block" : "hidden"} lg:block lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)] lg:overflow-y-auto`}>
-          <div className="rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
+        <aside
+          className={`${isMobileFilterOpen ? "block" : "hidden"} overflow-x-hidden lg:block lg:sticky lg:top-24 lg:h-[calc(100vh-7rem)] lg:overflow-y-auto`}
+        >
+          <div className="min-w-0 rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
             <div className="mb-2 inline-flex w-full rounded-lg border border-slate-300 bg-slate-100 p-1">
               <button
                 type="button"
@@ -1389,6 +1733,22 @@ export default function Home() {
                     <option value="30s">投稿者年齢層: 30代</option>
                     <option value="40s">投稿者年齢層: 40代以上</option>
                   </select>
+
+                  <select
+                    value={postFilter.posterPlatform}
+                    onChange={(e) =>
+                      setPostFilter((prev) => ({
+                        ...prev,
+                        posterPlatform: e.target.value as PostFilter["posterPlatform"],
+                      }))
+                    }
+                    className="w-full min-w-0 rounded border border-slate-400 bg-white p-2 text-sm text-slate-900"
+                  >
+                    <option value="all">投稿者プラットフォーム: すべて</option>
+                    <option value="origin">投稿者プラットフォーム: PC</option>
+                    <option value="xbl">投稿者プラットフォーム: Xbox</option>
+                    <option value="psn">投稿者プラットフォーム: PS</option>
+                  </select>
                 </>
               )}
 
@@ -1475,6 +1835,7 @@ export default function Home() {
                   <p>現在ランク: {formatRank(post.current_rank_tier, post.current_rank_division)}</p>
                   <p>最高到達ランク: {formatRank(post.max_rank_tier, post.max_rank_division)}</p>
                   <p>年齢層: {toAgeLabel(post.age_group)}</p>
+                  <p>プラットフォーム: {post.platform ? toPlatformLabel(post.platform) : "未設定"}</p>
                 </div>
               </section>
             </div>
@@ -1512,17 +1873,101 @@ export default function Home() {
 
                 {activePostId === post.id && (
                   <div className="mt-2 space-y-2 rounded-lg border border-slate-300 bg-slate-100 p-2">
-                    {applicants.map((app) => (
-                      <div key={app.id} className="flex items-center justify-between">
-                        <span className="text-sm text-slate-900">{app.applicant_user_id}</span>
-                        <button
-                          onClick={() => handleSelect(post.id, app.applicant_user_id)}
-                          className="text-sm font-semibold text-emerald-700 hover:text-emerald-800"
-                        >
-                          この人に決定
-                        </button>
-                      </div>
-                    ))}
+                    {applicants.length === 0 ? (
+                      <p className="text-sm text-slate-700">まだ応募はありません。</p>
+                    ) : (
+                      <>
+                        <div className="flex items-center justify-between text-xs text-slate-700">
+                          <span>
+                            応募者 {activeApplicantIndex + 1} / {applicants.length}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              onClick={() => setActiveApplicantIndex((prev) => Math.max(0, prev - 1))}
+                              disabled={activeApplicantIndex === 0}
+                              className="rounded border border-slate-300 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              前へ
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setActiveApplicantIndex((prev) => Math.min(applicants.length - 1, prev + 1))
+                              }
+                              disabled={activeApplicantIndex >= applicants.length - 1}
+                              className="rounded border border-slate-300 bg-white px-2 py-1 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              次へ
+                            </button>
+                          </div>
+                        </div>
+
+                        {activeApplicant && (
+                          <div className="rounded-md border border-slate-300 bg-white p-3 text-sm text-slate-900">
+                            <p className="font-semibold text-slate-950">
+                              {activeApplicantProfile?.display_name?.trim() ||
+                                activeApplicantProfile?.tracker_handle?.trim() ||
+                                `User ${activeApplicant.applicant_user_id.slice(0, 6)}`}
+                            </p>
+                            <p className="text-xs text-slate-600">ID: {activeApplicant.applicant_user_id}</p>
+                            <div className="mt-2 grid gap-1 sm:grid-cols-2">
+                              <p>
+                                現在ランク:{" "}
+                                {formatRank(
+                                  activeApplicantProfile?.current_rank_tier ?? undefined,
+                                  activeApplicantProfile?.current_rank_division ?? undefined
+                                )}
+                              </p>
+                              <p>
+                                最高到達ランク:{" "}
+                                {formatRank(
+                                  activeApplicantProfile?.max_rank_tier ?? undefined,
+                                  activeApplicantProfile?.max_rank_division ?? undefined
+                                )}
+                              </p>
+                              <p>年齢層: {toAgeLabel(activeApplicantProfile?.age_group ?? "") || "未設定"}</p>
+                            </div>
+
+                            <div className="mt-3 space-y-2 rounded-md border border-emerald-200 bg-emerald-50/50 p-2">
+                              <p className="text-xs font-semibold text-slate-900">選択時に送付する情報</p>
+                              <input
+                                type="text"
+                                placeholder="EAアカウント名"
+                                value={finalizePayloadByPost[post.id]?.eaAccountName ?? ""}
+                                onChange={(e) => updateFinalizePayload(post.id, "eaAccountName", e.target.value)}
+                                className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
+                              />
+                              {toVcKey(post.vc_type) === "discord" && (
+                                <input
+                                  type="text"
+                                  placeholder="Discordサーバ招待リンク"
+                                  value={finalizePayloadByPost[post.id]?.discordInviteLink ?? ""}
+                                  onChange={(e) => updateFinalizePayload(post.id, "discordInviteLink", e.target.value)}
+                                  className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
+                                />
+                              )}
+                              <textarea
+                                placeholder="一言メッセージ"
+                                value={finalizePayloadByPost[post.id]?.message ?? ""}
+                                onChange={(e) => updateFinalizePayload(post.id, "message", e.target.value)}
+                                rows={3}
+                                className="w-full rounded border border-slate-300 bg-white px-2 py-1.5 text-xs text-slate-900"
+                              />
+                            </div>
+
+                            <div className="mt-3">
+                              <button
+                                onClick={() => handleFinalizeSelection(post.id, activeApplicant.applicant_user_id)}
+                                className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-emerald-800"
+                              >
+                                この人に決定して通知を送る
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </>
+                    )}
                   </div>
                 )}
               </div>
@@ -1535,11 +1980,11 @@ export default function Home() {
                 </button>
               ) : (
                 <button
-                  onClick={() => handleApply(post.id)}
-                  disabled={!currentUserId}
+                  onClick={() => handleApply(post)}
+                  disabled={!currentUserId || post.user_id === currentUserId}
                   className="rounded-md bg-blue-600 px-4 py-2 text-sm font-medium text-white hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-400"
                 >
-                  {currentUserId ? "応募する" : "ログインして応募"}
+                  {currentUserId ? (post.user_id === currentUserId ? "自分の投稿" : "応募する") : "ログインして応募"}
                 </button>
               )}
             </div>

@@ -37,3 +37,13 @@ npm run dev
 npm run build
 npm run start
 ```
+
+## Profile + Tracker API setup (2026-02-27)
+
+1. Add `TRN_API_KEY` to `.env.local`.
+2. Run SQL in `supabase/profiles.sql` on your Supabase project.
+3. Open `/profile` after login, enter platform + player ID, fetch from Tracker, then save.
+
+### Notes
+- Tracker API is called from server route: `app/api/tracker/apex/route.ts`.
+- Do not expose `TRN_API_KEY` to client (`NEXT_PUBLIC_` prefix is not used).

@@ -1,7 +1,7 @@
-"use client";
+﻿"use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { User } from "@supabase/supabase-js";
 import { hasSupabaseEnv, supabase, supabaseConfigMessage } from "../../lib/supabase";
 
@@ -30,14 +30,9 @@ type PlayStyleTag = {
   created_at?: string;
 };
 
-const ADMIN_USER_IDS = (process.env.NEXT_PUBLIC_ADMIN_USER_IDS ?? "")
-  .split(",")
-  .map((id) => id.trim())
-  .filter(Boolean);
-const HAS_ADMIN_CONFIG = ADMIN_USER_IDS.length > 0;
-
 export default function AdminPage() {
   const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
   const [posts, setPosts] = useState<AdminPost[]>([]);
   const [tags, setTags] = useState<PlayStyleTag[]>([]);
   const [loading, setLoading] = useState(hasSupabaseEnv);
@@ -45,17 +40,29 @@ export default function AdminPage() {
   const [newTagName, setNewTagName] = useState("");
   const [tagError, setTagError] = useState<string | null>(null);
 
-  const isAdmin = useMemo(() => {
-    if (!currentUser) return false;
-    if (!HAS_ADMIN_CONFIG) return false;
-    return ADMIN_USER_IDS.includes(currentUser.id);
-  }, [currentUser]);
+  const checkIsAdmin = useCallback(async (userId: string | null) => {
+    if (!hasSupabaseEnv || !userId) return false;
+
+    const { data, error } = await supabase
+      .from("admin_users")
+      .select("user_id")
+      .eq("user_id", userId)
+      .maybeSingle();
+
+    if (error) {
+      console.error(error);
+      return false;
+    }
+
+    return Boolean(data?.user_id);
+  }, []);
 
   const fetchPosts = useCallback(async () => {
     if (!hasSupabaseEnv) {
       setPosts([]);
       return;
     }
+
     const { data, error } = await supabase
       .from("posts")
       .select(`
@@ -85,6 +92,7 @@ export default function AdminPage() {
       setTags([]);
       return;
     }
+
     const { data, error } = await supabase
       .from("play_style_tags")
       .select("id,name,is_active,created_at")
@@ -92,7 +100,7 @@ export default function AdminPage() {
 
     if (error) {
       console.error(error);
-      setTagError("play_style_tagsテーブルの取得に失敗しました。");
+      setTagError("Failed to load play style tags.");
       return;
     }
 
@@ -107,7 +115,10 @@ export default function AdminPage() {
     const bootstrap = async () => {
       const { data } = await supabase.auth.getSession();
       if (!mounted) return;
-      setCurrentUser(data.session?.user ?? null);
+
+      const user = data.session?.user ?? null;
+      setCurrentUser(user);
+      setIsAdmin(await checkIsAdmin(user?.id ?? null));
       setLoading(false);
     };
 
@@ -116,21 +127,22 @@ export default function AdminPage() {
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange((_event, session) => {
-      setCurrentUser(session?.user ?? null);
+      const user = session?.user ?? null;
+      setCurrentUser(user);
+      void (async () => {
+        setIsAdmin(await checkIsAdmin(user?.id ?? null));
+      })();
     });
 
     return () => {
       mounted = false;
       subscription.unsubscribe();
     };
-  }, []);
+  }, [checkIsAdmin]);
 
   useEffect(() => {
     if (!currentUser || !isAdmin) return;
-    const timer = window.setTimeout(() => {
-      void Promise.all([fetchPosts(), fetchTags()]);
-    }, 0);
-    return () => window.clearTimeout(timer);
+    void Promise.all([fetchPosts(), fetchTags()]);
   }, [currentUser, isAdmin, fetchPosts, fetchTags]);
 
   const handleClosePost = async (postId: number) => {
@@ -138,12 +150,14 @@ export default function AdminPage() {
       alert(supabaseConfigMessage);
       return;
     }
+
     const { error } = await supabase.from("posts").update({ is_closed: true }).eq("id", postId);
     if (error) {
       console.error(error);
-      alert("投稿のクローズに失敗しました");
+      alert("Failed to close post.");
       return;
     }
+
     await fetchPosts();
   };
 
@@ -152,15 +166,18 @@ export default function AdminPage() {
       alert(supabaseConfigMessage);
       return;
     }
+
     const { error } = await supabase
       .from("posts")
       .update({ is_closed: false, winner_user_id: null })
       .eq("id", postId);
+
     if (error) {
       console.error(error);
-      alert("投稿の再オープンに失敗しました");
+      alert("Failed to reopen post.");
       return;
     }
+
     await fetchPosts();
   };
 
@@ -169,15 +186,17 @@ export default function AdminPage() {
       alert(supabaseConfigMessage);
       return;
     }
-    const confirmed = confirm("この投稿を削除しますか？");
+
+    const confirmed = confirm("Delete this post?");
     if (!confirmed) return;
 
     const { error } = await supabase.from("posts").delete().eq("id", postId);
     if (error) {
       console.error(error);
-      alert("投稿の削除に失敗しました");
+      alert("Failed to delete post.");
       return;
     }
+
     await fetchPosts();
   };
 
@@ -186,13 +205,14 @@ export default function AdminPage() {
       alert(supabaseConfigMessage);
       return;
     }
+
     const name = newTagName.trim();
     if (!name) return;
 
     const { error } = await supabase.from("play_style_tags").insert([{ name, is_active: true }]);
     if (error) {
       console.error(error);
-      alert("タグの追加に失敗しました");
+      alert("Failed to create tag.");
       return;
     }
 
@@ -205,15 +225,18 @@ export default function AdminPage() {
       alert(supabaseConfigMessage);
       return;
     }
+
     const { error } = await supabase
       .from("play_style_tags")
       .update({ is_active: !tag.is_active })
       .eq("id", tag.id);
+
     if (error) {
       console.error(error);
-      alert("タグ状態の更新に失敗しました");
+      alert("Failed to update tag.");
       return;
     }
+
     await fetchTags();
   };
 
@@ -222,15 +245,17 @@ export default function AdminPage() {
       alert(supabaseConfigMessage);
       return;
     }
-    const confirmed = confirm("このタグを削除しますか？");
+
+    const confirmed = confirm("Delete this tag?");
     if (!confirmed) return;
 
     const { error } = await supabase.from("play_style_tags").delete().eq("id", tagId);
     if (error) {
       console.error(error);
-      alert("タグの削除に失敗しました");
+      alert("Failed to delete tag.");
       return;
     }
+
     await fetchTags();
   };
 
@@ -243,7 +268,7 @@ export default function AdminPage() {
   if (loading) {
     return (
       <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
-        <p>読み込み中...</p>
+        <p>Loading...</p>
       </main>
     );
   }
@@ -252,10 +277,10 @@ export default function AdminPage() {
     return (
       <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
         <div className="mx-auto max-w-xl rounded-xl border border-slate-300 bg-white p-6 shadow-sm">
-          <h1 className="mb-2 text-xl font-bold">管理者ページ</h1>
-          <p className="mb-4 text-sm text-slate-700">アクセスにはログインが必要です。</p>
+          <h1 className="mb-2 text-xl font-bold">Admin</h1>
+          <p className="mb-4 text-sm text-slate-700">Login is required.</p>
           <Link href="/" className="rounded-md bg-indigo-700 px-3 py-2 text-sm font-medium text-white">
-            トップへ戻る
+            Back to top
           </Link>
         </div>
       </main>
@@ -266,26 +291,10 @@ export default function AdminPage() {
     return (
       <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
         <div className="mx-auto max-w-xl rounded-xl border border-amber-300 bg-white p-6 shadow-sm">
-          <h1 className="mb-2 text-xl font-bold">管理者ページ</h1>
+          <h1 className="mb-2 text-xl font-bold">Admin</h1>
           <p className="mb-4 text-sm text-amber-800">{supabaseConfigMessage}</p>
           <Link href="/" className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white">
-            トップへ戻る
-          </Link>
-        </div>
-      </main>
-    );
-  }
-
-  if (!HAS_ADMIN_CONFIG) {
-    return (
-      <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
-        <div className="mx-auto max-w-xl rounded-xl border border-amber-300 bg-white p-6 shadow-sm">
-          <h1 className="mb-2 text-xl font-bold">管理者ページ</h1>
-          <p className="mb-4 text-sm text-amber-800">
-            管理者IDが未設定です。`NEXT_PUBLIC_ADMIN_USER_IDS` に Supabase ユーザーIDをカンマ区切りで設定してください。
-          </p>
-          <Link href="/" className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white">
-            トップへ戻る
+            Back to top
           </Link>
         </div>
       </main>
@@ -296,10 +305,10 @@ export default function AdminPage() {
     return (
       <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
         <div className="mx-auto max-w-xl rounded-xl border border-slate-300 bg-white p-6 shadow-sm">
-          <h1 className="mb-2 text-xl font-bold">管理者ページ</h1>
-          <p className="mb-4 text-sm text-rose-700">このアカウントには管理者権限がありません。</p>
+          <h1 className="mb-2 text-xl font-bold">Admin</h1>
+          <p className="mb-4 text-sm text-rose-700">You do not have admin permission.</p>
           <Link href="/" className="rounded-md bg-slate-800 px-3 py-2 text-sm font-medium text-white">
-            トップへ戻る
+            Back to top
           </Link>
         </div>
       </main>
@@ -310,20 +319,20 @@ export default function AdminPage() {
     <main className="min-h-screen bg-slate-100 p-6 text-slate-900">
       <div className="mx-auto max-w-5xl space-y-4">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h1 className="text-2xl font-bold text-slate-950">管理者ページ</h1>
+          <h1 className="text-2xl font-bold text-slate-950">Admin</h1>
           <Link href="/" className="rounded-md border border-slate-300 bg-white px-3 py-2 text-sm font-medium">
-            トップへ戻る
+            Back to top
           </Link>
         </div>
 
         <section className="rounded-xl border border-slate-300 bg-white p-4 shadow-sm">
-          <h2 className="mb-3 text-lg font-semibold">プレイスタイルタグ管理</h2>
+          <h2 className="mb-3 text-lg font-semibold">Play Style Tags</h2>
           <div className="mb-3 flex flex-wrap gap-2">
             <input
               type="text"
               value={newTagName}
               onChange={(e) => setNewTagName(e.target.value)}
-              placeholder="新しいタグ名"
+              placeholder="New tag"
               className="min-w-[220px] flex-1 rounded border border-slate-400 bg-white p-2 text-sm"
             />
             <button
@@ -331,7 +340,7 @@ export default function AdminPage() {
               onClick={handleCreateTag}
               className="rounded-md bg-indigo-700 px-3 py-2 text-sm font-medium text-white hover:bg-indigo-800"
             >
-              追加
+              Add
             </button>
           </div>
 
@@ -343,7 +352,7 @@ export default function AdminPage() {
                 <div className="text-sm">
                   <span className="font-medium">{tag.name}</span>
                   <span className={`ml-2 ${tag.is_active ? "text-emerald-700" : "text-slate-500"}`}>
-                    {tag.is_active ? "有効" : "無効"}
+                    {tag.is_active ? "active" : "inactive"}
                   </span>
                 </div>
                 <div className="flex gap-2">
@@ -352,26 +361,26 @@ export default function AdminPage() {
                     onClick={() => handleToggleTag(tag)}
                     className="rounded border border-slate-300 bg-slate-100 px-2 py-1 text-xs"
                   >
-                    {tag.is_active ? "無効化" : "有効化"}
+                    {tag.is_active ? "disable" : "enable"}
                   </button>
                   <button
                     type="button"
                     onClick={() => handleDeleteTag(tag.id)}
                     className="rounded bg-rose-700 px-2 py-1 text-xs text-white hover:bg-rose-800"
                   >
-                    削除
+                    delete
                   </button>
                 </div>
               </div>
             ))}
-            {tags.length === 0 && <p className="text-sm text-slate-600">タグがありません</p>}
+            {tags.length === 0 && <p className="text-sm text-slate-600">No tags.</p>}
           </div>
         </section>
 
         <section className="rounded-xl border border-slate-300 bg-white p-3 shadow-sm">
           <input
             type="text"
-            placeholder="タイトル / 投稿者ID / モードで絞り込み"
+            placeholder="Filter by title / user / mode"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             className="w-full rounded border border-slate-400 bg-white p-2 text-sm"
@@ -385,9 +394,9 @@ export default function AdminPage() {
                 <div>
                   <h2 className="text-lg font-semibold">{post.title}</h2>
                   <p className="text-xs text-slate-600">
-                    投稿者ID: {post.user_id} / モード: {post.mode} / 募集人数: {post.recruit_count}
+                    user: {post.user_id} / mode: {post.mode} / recruit: {post.recruit_count}
                   </p>
-                  <p className="text-xs text-slate-600">投稿日: {new Date(post.created_at).toLocaleString("ja-JP")}</p>
+                  <p className="text-xs text-slate-600">created: {new Date(post.created_at).toLocaleString("ja-JP")}</p>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {post.is_closed ? (
@@ -396,7 +405,7 @@ export default function AdminPage() {
                       onClick={() => handleReopenPost(post.id)}
                       className="rounded-md bg-amber-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-amber-700"
                     >
-                      再オープン
+                      reopen
                     </button>
                   ) : (
                     <button
@@ -404,7 +413,7 @@ export default function AdminPage() {
                       onClick={() => handleClosePost(post.id)}
                       className="rounded-md bg-slate-800 px-3 py-1.5 text-sm font-medium text-white hover:bg-slate-900"
                     >
-                      クローズ
+                      close
                     </button>
                   )}
                   <button
@@ -412,13 +421,13 @@ export default function AdminPage() {
                     onClick={() => handleDeletePost(post.id)}
                     className="rounded-md bg-rose-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-rose-800"
                   >
-                    削除
+                    delete
                   </button>
                 </div>
               </div>
 
               <div className="mt-3 rounded-md border border-slate-200 bg-slate-50 p-3">
-                <p className="mb-1 text-sm font-semibold">応募一覧 ({post.applications?.length ?? 0})</p>
+                <p className="mb-1 text-sm font-semibold">Applications ({post.applications?.length ?? 0})</p>
                 <ul className="space-y-1 text-sm text-slate-700">
                   {(post.applications ?? []).map((app) => (
                     <li key={app.id}>
@@ -426,7 +435,7 @@ export default function AdminPage() {
                       {app.created_at ? ` / ${new Date(app.created_at).toLocaleString("ja-JP")}` : ""}
                     </li>
                   ))}
-                  {(post.applications ?? []).length === 0 && <li>応募なし</li>}
+                  {(post.applications ?? []).length === 0 && <li>No applications</li>}
                 </ul>
               </div>
             </article>
@@ -434,7 +443,7 @@ export default function AdminPage() {
 
           {filteredPosts.length === 0 && (
             <p className="rounded-xl border border-slate-300 bg-white p-6 text-center text-sm text-slate-600 shadow-sm">
-              投稿がありません
+              No posts.
             </p>
           )}
         </div>
