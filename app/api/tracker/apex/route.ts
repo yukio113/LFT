@@ -6,6 +6,7 @@ const TRACKER_APEX_PROFILE_PATH = "/v2/apex/standard/profile";
 const PLAYER_ID_MAX_LENGTH = 64;
 const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
 const RATE_LIMIT_MAX_REQUESTS = 20;
+const CONTROL_CHAR_PATTERN = /[\x00-\x1F\x7F]/;
 
 const PLATFORM_ALLOWLIST = new Set(["origin", "xbl", "psn"]);
 const TIER_KEY_MAP: Record<string, string> = {
@@ -243,6 +244,9 @@ export async function GET(request: Request) {
       { error: `playerId must be ${PLAYER_ID_MAX_LENGTH} characters or less.` },
       { status: 400 }
     );
+  }
+  if (CONTROL_CHAR_PATTERN.test(playerId)) {
+    return NextResponse.json({ error: "playerId contains invalid control characters." }, { status: 400 });
   }
 
   const endpoint = `${baseUrl}${TRACKER_APEX_PROFILE_PATH}/${platform}/${encodeURIComponent(playerId)}`;

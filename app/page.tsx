@@ -1020,7 +1020,7 @@ export default function Home() {
     }
 
     const { data: profilesData, error: profilesError } = await supabase
-      .from("profiles")
+      .from("public_profiles")
       .select(
         "user_id,display_name,tracker_handle,current_rank_tier,current_rank_division,max_rank_tier,max_rank_division,age_group"
       )
